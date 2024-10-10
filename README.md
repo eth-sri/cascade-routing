@@ -279,6 +279,3 @@ The `data/` folder should contain all necessary data for running the experiments
         primaryClass={cs.CL} 
 }
 ```
-
-## TODO
-- test the default std strategy
