@@ -41,6 +41,7 @@ def run_dataset(
         read_cost,
         write_cost,
         chat=False,
+        sequential=False,
         **kwargs
 ):
     """
@@ -60,6 +61,7 @@ def run_dataset(
         tuple: A tuple containing the output model answers, output costs, and output qualities.
     """
     queries = get_queries(df, validation_df, num_fewshot, prompt_template_function, chat)
+    # queries = queries[-20:]
 
     api_query = APIQuery(
         model=model,
@@ -73,12 +75,12 @@ def run_dataset(
         read_cost=read_cost,
         write_cost=write_cost,
         echo=True,
-        requests_per_second=20,
+        requests_per_second=20 if api != "huggingface" else 1,
+        sequential=sequential,
         **kwargs
     )
 
     outputs, detailed_cost, cost = asyncio.run(api_query.run_queries(queries))
-
     logger.info(f'Cost: {cost}')
 
     output_model_answers = []
@@ -86,7 +88,7 @@ def run_dataset(
     output_qualities = []
 
     current_index = 0
-
+    
     for sample_index in range(len(df)):
         options = df['options'].iloc[sample_index]
         answer = df['answer'].iloc[sample_index]
@@ -101,9 +103,11 @@ def run_dataset(
         model_answers = np.exp(model_answers)
         model_answers /= np.sum(model_answers)
         output_model_answers.append(list(model_answers))
-        output_costs.append(cost['cost'] - cost['output_tokens'] / 10 ** 6 * write_cost) # because of the idiotic way in which the together api works, we have to do it this way
+        if sequential:
+            output_costs.append(cost['time'])
+        else:
+            output_costs.append(cost['cost'] - cost['output_tokens'] / 10 ** 6 * write_cost) # because of the idiotic way in which the together api works, we have to do it this way
         output_qualities.append(float(options[np.argmax(model_answers)] == answer))
-
     return output_model_answers, output_costs, output_qualities
 
 def get_queries(df, validation_df, num_fewshot, prompt_template_function, chat, include_output=True):
@@ -395,7 +399,8 @@ A'''
     FIVE_SHOT_PREFIX_MULTIPLECHOICE = '\n\n'.join(FIVE_SHOT_PREFIX_MULTIPLECHOICE.split('\n\n')[:num_fewshot]) + '\n\n'
     return train_data, FIVE_SHOT_PREFIX_MULTIPLECHOICE, test_data
 
-def main(models, dataset, output_folder, num_fewshot=3, api='together', max_samples=None):
+def main(models, dataset, output_folder, num_fewshot=3, api='together', max_samples=None, 
+         sequential=False):
     """
     Run classification inference on the specified dataset using the given models.
     Args:
@@ -430,16 +435,18 @@ def main(models, dataset, output_folder, num_fewshot=3, api='together', max_samp
         queries = get_queries(df, validation, num_fewshot, prompt, chat=False, include_output=False)
         for model in models:
             if not os.path.isfile(f'{output_folder}/{df_name}/{model["name"]}.json'):
+                api_here = api if not model.get('is_huggingface', False) else 'huggingface'
                 model_answers, costs, qualities = run_dataset(
                     model=model['name'],
-                    api=api,
+                    api=api_here,
                     df=df,
                     validation_df=validation,
                     num_fewshot=num_fewshot,
                     prompt_template_function=prompt,
                     read_cost=model['read_cost'],
                     write_cost=model['write_cost'],
-                    chat=False
+                    chat=False,
+                    sequential=sequential
                 )
                 store_model_outputs(model_answers, costs, qualities, f'{output_folder}/{df_name}/{model["name"]}.json')
         store_all_models([f'{output_folder}/{df_name}/{model["name"]}.json' for model in models], [model['name'] for model in models], f"{output_folder}/{df_name}", 
@@ -453,6 +460,7 @@ if __name__ == '__main__':
     parser.add_argument('--output_folder', type=str, default='data/classification')
     parser.add_argument('--num_fewshot', type=int, default=1)
     parser.add_argument('--samples', type=int, default=None)
+    parser.add_argument('--sequential', action='store_true')
 
     args = parser.parse_args()
 
@@ -502,8 +510,57 @@ if __name__ == '__main__':
             'read_cost': 0.6,
             'write_cost': 0.6
         },
+        {
+            'name': 'Qwen/Qwen2.5-0.5B-Instruct',
+            'read_cost': 0.03,
+            'write_cost': 0.03,
+            "is_huggingface": True
+        },
+        {
+            'name': 'Qwen/Qwen2.5-1.5B-Instruct',
+            'read_cost': 0.1,
+            'write_cost': 0.1,
+            "is_huggingface": True
+        },
+        {
+            'name': 'Qwen/Qwen2.5-3B-Instruct',
+            'read_cost': 0.2,
+            'write_cost': 0.2,
+            "is_huggingface": True
+        },
+        {
+            'name': 'Qwen/Qwen2.5-7B-Instruct-Turbo',
+            'read_cost': 0.3,
+            'write_cost': 0.3
+        },
+        {
+            'name': 'Qwen/Qwen2.5-72B-Instruct-Turbo',
+            'read_cost': 1.2,
+            'write_cost': 1.2
+        },
+        {
+            'name': 'microsoft/Phi-3.5-mini-instruct',
+            'read_cost': 0.2,
+            'write_cost': 0.2,
+            "is_huggingface": True
+        },
+        # {
+        #     'name': 'microsoft/Phi-3-small-8k-instruct',
+        #     'read_cost': 0.3,
+        #     'write_cost': 0.3,
+        #     "is_huggingface": True
+        # },
+        # {
+        #     'name': 'microsoft/Phi-3-medium-128k-instruct',
+        #     'read_cost': 0.5,
+        #     'write_cost': 0.5,
+        #     "is_huggingface": True
+        # },
     ]
 
-    main(models, args.dataset, f'{args.output_folder}/{args.dataset}', num_fewshot=args.num_fewshot, api='together', 
-         max_samples=args.samples)
+    output_folder = f"{args.output_folder}/{args.dataset}"
+    if args.sequential:
+        output_folder += '_sequential'
+    main(models, args.dataset, output_folder, num_fewshot=args.num_fewshot, api='together', 
+         max_samples=args.samples, sequential=args.sequential)
 

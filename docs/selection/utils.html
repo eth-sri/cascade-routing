@@ -183,7 +183,7 @@ models and their interpolated qualities based on baseline models.</p>
 </dl></div>
 </dd>
 <dt id="selection.utils.test_everything"><code class="name flex">
-<span>def <span class="ident">test_everything</span></span>(<span>models, test_costs_averaged, test_qualities_averaged, n_iterations=5, no_router=False, no_cascade=False, no_cascade_router=False, **kwargs)</span>
+<span>def <span class="ident">test_everything</span></span>(<span>models, test_costs_averaged, test_qualities_averaged, n_iterations=5, no_router=False, no_cascade=False, no_cascade_router=False, assume_constant=False, use_sum_costs=False, **kwargs)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Test the performance of different models using various configurations.</p>
@@ -228,7 +228,7 @@ models and their interpolated qualities based on baseline models.</p>
 </dl></div>
 </dd>
 <dt id="selection.utils.test_router"><code class="name flex">
-<span>def <span class="ident">test_router</span></span>(<span>models, max_cost, train_model_answers, train_costs, train_qualities, train_queries, test_model_answers, test_costs, test_qualities, test_queries, data_folder, dataset, assume_constant=False, model_class=sklearn.linear_model._logistic.LogisticRegression, n_highest_include=2, train_split=800, max_lambda=10000, is_router=False, greedy=False, is_cascader=False, is_cascader_ours=False, force_order=False, max_depth=None, n_samples=100, ground_truth_noise_before=None, ground_truth_noise_after=None, do_speedup=True, set_sigma_none=False, is_classification=True, cost_noise_before=None, cost_noise_after=None, ground_truth_cost_computer=False, is_routerbench=False, cascade_strategies=[&lt;function &lt;lambda&gt;&gt;, &lt;function &lt;lambda&gt;&gt;, &lt;function &lt;lambda&gt;&gt;], cascade_router_strategies=[&lt;function &lt;lambda&gt;&gt;, &lt;function &lt;lambda&gt;&gt;, &lt;function &lt;lambda&gt;&gt;])</span>
+<span>def <span class="ident">test_router</span></span>(<span>models, max_cost, train_model_answers, train_costs, train_qualities, train_queries, test_model_answers, test_costs, test_qualities, test_queries, data_folder, dataset, assume_constant=False, model_class=sklearn.linear_model._logistic.LogisticRegression, n_highest_include=2, train_split=800, max_lambda=10000, is_router=False, greedy=False, is_cascader=False, is_cascader_ours=False, force_order=False, max_depth=None, n_samples=100, ground_truth_noise_before=None, ground_truth_noise_after=None, do_speedup=True, is_latency_cost=False, set_sigma_none=False, is_classification=True, cost_noise_before=None, cost_noise_after=None, is_swebench=False, is_code_math=False, ground_truth_cost_computer=False, is_routerbench=False, cascade_strategies=[&lt;function &lt;lambda&gt;&gt;, &lt;function &lt;lambda&gt;&gt;, &lt;function &lt;lambda&gt;&gt;], cascade_router_strategies=[&lt;function &lt;lambda&gt;&gt;, &lt;function &lt;lambda&gt;&gt;, &lt;function &lt;lambda&gt;&gt;])</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Performs model selection using the specified parameters.</p>

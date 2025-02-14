@@ -3,6 +3,7 @@ from langchain_together import Together
 from langchain_openai import OpenAI
 from aiohttp import ClientSession
 from langchain_core.runnables import get_config_list
+from langchain_huggingface import HuggingFacePipeline
 
 from typing import (
     List,
@@ -16,6 +17,88 @@ import inspect
 
 # This code contains classes that were almost completely copied from the respective libraries
 # and modified to be compatible with the API framework used in this project.
+
+
+class HuggingFacePipelineFixed(HuggingFacePipeline):
+    def _generate(
+        self,
+        prompts: List[str],
+        stop: Optional[List[str]] = None,
+        run_manager= None,
+        **kwargs: Any,
+    ) -> LLMResult:
+        # List to hold all results
+        text_generations: List[str] = []
+        pipeline_kwargs = kwargs.get("pipeline_kwargs", {})
+        skip_prompt = kwargs.get("skip_prompt", False)
+
+        for i in range(0, len(prompts), self.batch_size):
+            batch_prompts = prompts[i : i + self.batch_size]
+
+            # Process batch of prompts
+            responses = self.pipeline(
+                batch_prompts,
+                **pipeline_kwargs,
+            )
+
+            # Process each response in the batch
+            for j, response in enumerate(responses):
+                if isinstance(response, list):
+                    # if model returns multiple generations, pick the top one
+                    response = response[0]
+                if skip_prompt:
+                    text = text[len(batch_prompts[j]) :]
+                # Append the processed text to results
+                text_generations.append(response)
+
+        return LLMResult(
+            generations=[[Generation(text=response['content'], generation_info=response)] for response in text_generations]
+        )
+    async def abatch(
+        self,
+        inputs,
+        config=None,
+        *,
+        return_exceptions: bool = False,
+        **kwargs: Any,
+    ) -> List[str]:
+        if not inputs:
+            return []
+        config = get_config_list(config, len(inputs))
+        max_concurrency = config[0].get("max_concurrency")
+
+        if max_concurrency is None:
+            try:
+                llm_result = await self.agenerate_prompt(
+                    [self._convert_input(input) for input in inputs],
+                    callbacks=[c.get("callbacks") for c in config],
+                    tags=[c.get("tags") for c in config],
+                    metadata=[c.get("metadata") for c in config],
+                    run_name=[c.get("run_name") for c in config],
+                    **kwargs,
+                )
+                return [g[0] for g in llm_result.generations]
+            except Exception as e:
+                if return_exceptions:
+                    return cast(List[str], [e for _ in inputs])
+                else:
+                    raise e
+        else:
+            batches = [
+                inputs[i : i + max_concurrency]
+                for i in range(0, len(inputs), max_concurrency)
+            ]
+            config = [{**c, "max_concurrency": None} for c in config]  # type: ignore[misc]
+            return [
+                output
+                for i, batch in enumerate(batches)
+                for output in await self.abatch(
+                    batch,
+                    config=config[i * max_concurrency : (i + 1) * max_concurrency],
+                    return_exceptions=return_exceptions,
+                    **kwargs,
+                )
+            ]
 
 class AnthropicLLMCompletion(AnthropicLLM):
     async def _acall(self, prompt, stop=None, run_manager=None, **kwargs) -> str:
@@ -47,6 +130,7 @@ class AnthropicLLMCompletion(AnthropicLLM):
 
 class TogetherLLMCompletion(Together):
     echo : bool = False
+    stop : Optional[List[str]] = None
 
     @property
     def default_params(self) -> Dict[str, Any]:
@@ -55,7 +139,7 @@ class TogetherLLMCompletion(Together):
         Returns:
             A dictionary containing the default parameters.
         """
-        return {
+        kwargs = {
             "model": self.model,
             "temperature": self.temperature,
             "top_p": self.top_p,
@@ -65,6 +149,7 @@ class TogetherLLMCompletion(Together):
             "logprobs": self.logprobs,
             "echo": self.echo
         }
+        return kwargs
     
     async def _acall(self, prompt, stop=None, run_manager=None, **kwargs) -> str:
         """Call Together model to get predictions based on the prompt.
@@ -83,6 +168,9 @@ class TogetherLLMCompletion(Together):
             "Content-Type": "application/json",
         }
         stop_to_use = stop[0] if stop and len(stop) == 1 else stop
+        if self.stop is not None:
+            stop_to_use = self.stop
+
         payload = {
             **self.default_params,
             "prompt": prompt,

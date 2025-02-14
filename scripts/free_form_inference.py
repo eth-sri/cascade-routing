@@ -18,6 +18,7 @@ def run_dataset(
         read_cost,
         write_cost,
         parse_answer_function,
+        sequential=False,
         **kwargs
 ):
     """
@@ -53,7 +54,8 @@ def run_dataset(
         chat=True,
         read_cost=read_cost,
         write_cost=write_cost,
-        requests_per_second=5,
+        requests_per_second=5 if api != "huggingface" else 1,
+        sequential=sequential,
         **kwargs
     )
 
@@ -73,7 +75,10 @@ def run_dataset(
             else:
                 parsed_answer = 0
         output_model_answers.append((output[0], [token[0][1] for token in output[1] if token is not None], parsed_answer))
-        output_costs.append(detailed_cost[i]['cost'])
+        if sequential:
+            output_costs.append(detailed_cost[i]['time'])
+        else:
+            output_costs.append(detailed_cost[i]['cost'])
         
         correct = float(parsed_answer == df.iloc[i]['answer'])
         output_qualities.append(correct)
@@ -261,7 +266,7 @@ def parse_gsm8k():
     system_prompt = "The following are math problems. Please provide the answer to the math problem by thinking step-by-step. Finish your answer with the answer in the format \"#### X\" where X is the correct integer answer."
     return train, validation, test, system_prompt
 
-def main(models, dataset, output_folder, num_fewshot=3, api='together', max_samples=None):
+def main(models, dataset, output_folder, num_fewshot=3, api='together', max_samples=None, sequential=False):
     """
     Run the main function for API querying
     Args:
@@ -292,9 +297,10 @@ def main(models, dataset, output_folder, num_fewshot=3, api='together', max_samp
         queries = get_queries(df, validation, num_fewshot, system_prompt)
         for model in models:
             if not os.path.isfile(f'{output_folder}/{df_name}/{model["name"]}.json'):
+                api_here = api if not model.get('is_huggingface', False) else 'huggingface'
                 model_answers, costs, qualities = run_dataset(
                     model=model['name'],
-                    api=api,
+                    api=api_here,
                     df=df,
                     validation_df=validation,
                     num_fewshot=num_fewshot,
@@ -302,6 +308,7 @@ def main(models, dataset, output_folder, num_fewshot=3, api='together', max_samp
                     write_cost=model['write_cost'],
                     parse_answer_function=parser,
                     system_message=system_prompt,
+                    sequential=sequential
                 )
                 store_model_outputs(model_answers, costs, qualities, f'{output_folder}/{df_name}/{model["name"]}.json')
             else:
@@ -320,6 +327,7 @@ if __name__ == '__main__':
     parser.add_argument('--output_folder', type=str, default='data/free_form')
     parser.add_argument('--num_fewshot', type=int, default=1)
     parser.add_argument('--samples', type=int, default=None)
+    parser.add_argument('--sequential', action='store_true')
 
     args = parser.parse_args()
 
@@ -369,7 +377,44 @@ if __name__ == '__main__':
             'read_cost': 0.6,
             'write_cost': 0.6
         },
+        {
+            'name': 'Qwen/Qwen2.5-0.5B-Instruct',
+            'read_cost': 0.03,
+            'write_cost': 0.03,
+            "is_huggingface": True
+        },
+        {
+            'name': 'Qwen/Qwen2.5-1.5B-Instruct',
+            'read_cost': 0.1,
+            'write_cost': 0.1,
+            "is_huggingface": True
+        },
+        {
+            'name': 'Qwen/Qwen2.5-3B-Instruct',
+            'read_cost': 0.2,
+            'write_cost': 0.2,
+            "is_huggingface": True
+        },
+        {
+            'name': 'Qwen/Qwen2.5-7B-Instruct-Turbo',
+            'read_cost': 0.3,
+            'write_cost': 0.3
+        },
+        {
+            'name': 'Qwen/Qwen2.5-72B-Instruct-Turbo',
+            'read_cost': 1.2,
+            'write_cost': 1.2
+        },
+        {
+            'name': 'microsoft/Phi-3.5-mini-instruct',
+            'read_cost': 0.2,
+            'write_cost': 0.2,
+            "is_huggingface": True
+        },
     ]
-
-    main(models, args.dataset, f'{args.output_folder}/{args.dataset}', 
-         num_fewshot=args.num_fewshot, api='together', max_samples=args.samples)
+    output_folder = f"{args.output_folder}/{args.dataset}"
+    if args.sequential:
+        output_folder += '_sequential'
+    main(models, args.dataset, output_folder, 
+         num_fewshot=args.num_fewshot, api='together', max_samples=args.samples, 
+         sequential=args.sequential)

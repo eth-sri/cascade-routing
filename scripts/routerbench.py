@@ -31,6 +31,11 @@ if __name__ == '__main__':
     parser.add_argument('--models', type=str, default='0,1,2')
     parser.add_argument('--noise-level', type=str, default='low')
     parser.add_argument('--few-shot', action='store_true')
+    parser.add_argument("--noise-before", type=float, default=None)
+    parser.add_argument("--noise-after", type=float, default=None)
+    parser.add_argument("--cost-noise-before", type=float, default=None)
+    parser.add_argument("--cost-noise-after", type=float, default=None)
+    parser.add_argument("--extensive-file", action='store_true')
 
     args = parser.parse_args()
 
@@ -95,6 +100,15 @@ if __name__ == '__main__':
         ground_truth_noise_after=1.2 
         cost_noise_before=100
         cost_noise_after=100
+    
+    if args.noise_before is not None:
+        ground_truth_noise_before = args.noise_before
+    if args.noise_after is not None:
+        ground_truth_noise_after = args.noise_after
+    if args.cost_noise_before is not None:
+        cost_noise_before = args.cost_noise_before
+    if args.cost_noise_after is not None:
+        cost_noise_after = args.cost_noise_after
 
     results = test_everything(models,
                         train_model_answers=answers_train,
@@ -115,7 +129,7 @@ if __name__ == '__main__':
                         n_cores=50, 
                         greedy=False, 
                         train_split=0, 
-                        force_order=True, 
+                        force_order=False, 
                         max_depth=5, 
                         n_samples=100, 
                         ground_truth_noise_before=ground_truth_noise_before, 
@@ -128,8 +142,12 @@ if __name__ == '__main__':
                         cascade_strategies=cascade_strategies,
                         cascade_router_strategies=cascade_router_strategies,
     )
-
-    filename = f'{args.models}_{args.noise_level}_{"5shot" if args.few_shot else "0shot"}.json'
+    filename = f'{args.models}_{args.noise_level}_{"5shot" if args.few_shot else "0shot"}'
+    if args.extensive_file:
+        str_noises = f"{ground_truth_noise_before},{ground_truth_noise_after},{cost_noise_before},{cost_noise_after}_False"
+        filename += f'_{str_noises}.json'
+    else:
+        filename += '.json'
 
     folder = 'data/results/routerbench'
     if not os.path.exists(folder):

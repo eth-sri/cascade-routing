@@ -2,11 +2,11 @@ from .classification import ClassificationQualityComputer
 from .base_computer import BaseComputer
 from .cost_computer import BaseCostComputer
 import numpy as np
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LinearRegression
 
 class OpenFormCostComputer(BaseCostComputer):
     def __init__(self, input_costs, output_costs, tokenizers=None, tokenize=True, 
-                 store_all=False, constant_cost=False):
+                 store_all=False, constant_cost=False, is_latency_cost=False):
         """
         Initializes an instance of the OpenFormCostComputer class.
         Computes the cost of running a model on a question.
@@ -30,14 +30,18 @@ class OpenFormCostComputer(BaseCostComputer):
         self.computed_costs = []
         self.store_all = store_all
         self.constant_cost = constant_cost
+        self.is_latency_cost = is_latency_cost
+        self.latency_models = []
+        self.computed_latency_costs = []
         assert tokenizers is not None or not tokenize
 
-    def fit(self, questions, model_answers, measure=None):
+    def fit(self, questions, model_answers, measure):
         self.average_output_cost = []
         self.constant_costs = []
         for model in range(len(model_answers[0])):
             tokenized_answers = [model_answers[i][model][0] for i in range(len(model_answers))]
             self.computed_costs.append(dict())
+            self.computed_latency_costs.append(dict())
             if self.tokenize:
                 tokenized_answers = self.tokenizers[model](tokenized_answers, padding=False)['input_ids']
             average_output_cost = np.mean([self.output_costs[model] * len(tokenized_answer) for tokenized_answer in tokenized_answers])
@@ -49,6 +53,28 @@ class OpenFormCostComputer(BaseCostComputer):
                 tokenized_questions = self.tokenizers[model](tokenized_questions, padding=False)['input_ids']
             average_input_cost = np.mean([self.input_costs[model] * len(tokenized_question) for tokenized_question in tokenized_questions])
             self.constant_costs.append(average_input_cost + average_output_cost)
+            latency_model_X = [[len(question[0])] for question in questions]
+            self.latency_models.append(LinearRegression())
+            self.latency_models[model].fit(latency_model_X, measure[:, model])
+
+    def add_latency_ground_truths(self, questions, model_answers, latencies):
+        """
+        Add latency ground truths for the given questions and model answers.
+
+        Args:
+            questions (list): List of questions.
+            model_answers (list): List of model answers.
+            latencies (list): List of latencies.
+
+        Returns:
+            None
+        """
+        for index, question in enumerate(questions):
+            for model in range(len(model_answers[0])):
+                if not isinstance(question, str):
+                    question = question[0]
+                if question not in self.computed_costs[model]:
+                    self.computed_latency_costs[model][question] = latencies[index][model]
 
     def predict(self, questions, model_answers):
         length_models = len(model_answers[0])
@@ -69,31 +95,37 @@ class OpenFormCostComputer(BaseCostComputer):
                 question = questions[i]
                 if not isinstance(question, str):
                     question = question[0]
-                if (self.training or self.store_all) and question in self.computed_costs[model] and \
-                    models_run in self.computed_costs[model][question]:
+                if self.is_latency_cost and question in self.computed_latency_costs[model] and model_answers[i][model] is not None:
+                    costs.append(self.computed_latency_costs[model][question])
+                    continue
+                if (self.training or self.store_all) and question in self.computed_costs[model] and models_run in self.computed_costs[model][question]:
                     costs.append(self.computed_costs[model][question][models_run])
                     continue
-
-                if tokenized_question is None:
-                    tokenized_question = question
-                    tokenized_model_answers = [answer[0] if answer is not None else None 
-                                               for answer in model_answers[i]]
-                    if self.tokenize:
-                        tokenized_question = [self.tokenizers[model]([question], padding=False)['input_ids'][0] for model in range(length_models)]
-                        tokenized_model_answers = [
-                            self.tokenizers[model]([answer[0]], padding=False)['input_ids'][0] 
-                            if answer is not None else None
-                            for answer, model in zip(model_answers[i], range(length_models))
-                        ]
-                cost = self.input_costs[model] * len(tokenized_question[model])
-                if model_answers[i][model] is None and models_run.count('1') == 0:
-                    cost += self.average_output_cost[model]
-                elif model_answers[i][model] is None:
-                    cost += self.output_costs[model] * np.mean([len(answer) 
-                                                                for answer in tokenized_model_answers 
-                                                                if answer is not None])
+                
+                if self.is_latency_cost:
+                    cost = self.latency_models[model].predict([[len(question)]])[0]
                 else:
-                    cost += self.output_costs[model] * len(tokenized_model_answers[model])
+                    if tokenized_question is None:
+                        tokenized_question = question
+                        tokenized_model_answers = [answer[0] if answer is not None else None 
+                                                for answer in model_answers[i]]
+                        if self.tokenize:
+                            tokenized_question = [self.tokenizers[model]([question], padding=False)['input_ids'][0] for model in range(length_models)]
+                            tokenized_model_answers = [
+                                self.tokenizers[model]([answer[0]], padding=False)['input_ids'][0] 
+                                if answer is not None else None
+                                for answer, model in zip(model_answers[i], range(length_models))
+                            ]
+                    cost = self.input_costs[model] * len(tokenized_question[model])
+                    if model_answers[i][model] is None and models_run.count('1') == 0:
+                        cost += self.average_output_cost[model]
+                    elif model_answers[i][model] is None:
+                        cost += self.output_costs[model] * np.mean([len(answer) 
+                                                                    for answer in tokenized_model_answers 
+                                                                    if answer is not None])
+                    else:
+                        cost += self.output_costs[model] * len(tokenized_model_answers[model])
+                
                 costs.append(cost)
                 if self.store_all or self.training:
                     if question in self.computed_costs[model]:
@@ -137,7 +169,7 @@ class OpenFormQualityComputer(ClassificationQualityComputer):
         question = question.split(self.answer_indicator)[0].strip()
         return question
     
-    def agreement_features(self, n_models, models_answers_sample):
+    def agreement_features(self, question, n_models, models_answers_sample):
         features = []
         for i in range(n_models):
             for j in range(i + 1, n_models):

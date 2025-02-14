@@ -96,6 +96,167 @@ model = AnthropicLLM()
 <li>abc.ABC</li>
 </ul>
 </dd>
+<dt id="selection.completion_llms.HuggingFacePipelineFixed"><code class="flex name class">
+<span>class <span class="ident">HuggingFacePipelineFixed</span></span>
+<span>(</span><span>*args: Any, **kwargs: Any)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>HuggingFace Pipeline API.</p>
+<p>To use, you should have the <code>transformers</code> python package installed.</p>
+<p>Only supports <code>text-generation</code>, <code>text2text-generation</code>, <code>summarization</code> and
+<code>translation</code>
+for now.</p>
+<p>Example using from_model_id:
+.. code-block:: python</p>
+<pre><code>    from langchain_huggingface import HuggingFacePipeline
+    hf = HuggingFacePipeline.from_model_id(
+        model_id="gpt2",
+        task="text-generation",
+        pipeline_kwargs={"max_new_tokens": 10},
+    )
+</code></pre>
+<p>Example passing pipeline in directly:
+.. code-block:: python</p>
+<pre><code>    from langchain_huggingface import HuggingFacePipeline
+    from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+
+    model_id = "gpt2"
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(model_id)
+    pipe = pipeline(
+        "text-generation", model=model, tokenizer=tokenizer, max_new_tokens=10
+    )
+    hf = HuggingFacePipeline(pipeline=pipe)
+</code></pre></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class HuggingFacePipelineFixed(HuggingFacePipeline):
+    def _generate(
+        self,
+        prompts: List[str],
+        stop: Optional[List[str]] = None,
+        run_manager= None,
+        **kwargs: Any,
+    ) -&gt; LLMResult:
+        # List to hold all results
+        text_generations: List[str] = []
+        pipeline_kwargs = kwargs.get(&#34;pipeline_kwargs&#34;, {})
+        skip_prompt = kwargs.get(&#34;skip_prompt&#34;, False)
+
+        for i in range(0, len(prompts), self.batch_size):
+            batch_prompts = prompts[i : i + self.batch_size]
+
+            # Process batch of prompts
+            responses = self.pipeline(
+                batch_prompts,
+                **pipeline_kwargs,
+            )
+
+            # Process each response in the batch
+            for j, response in enumerate(responses):
+                if isinstance(response, list):
+                    # if model returns multiple generations, pick the top one
+                    response = response[0]
+                if skip_prompt:
+                    text = text[len(batch_prompts[j]) :]
+                # Append the processed text to results
+                text_generations.append(response)
+
+        return LLMResult(
+            generations=[[Generation(text=response[&#39;content&#39;], generation_info=response)] for response in text_generations]
+        )
+    async def abatch(
+        self,
+        inputs,
+        config=None,
+        *,
+        return_exceptions: bool = False,
+        **kwargs: Any,
+    ) -&gt; List[str]:
+        if not inputs:
+            return []
+        config = get_config_list(config, len(inputs))
+        max_concurrency = config[0].get(&#34;max_concurrency&#34;)
+
+        if max_concurrency is None:
+            try:
+                llm_result = await self.agenerate_prompt(
+                    [self._convert_input(input) for input in inputs],
+                    callbacks=[c.get(&#34;callbacks&#34;) for c in config],
+                    tags=[c.get(&#34;tags&#34;) for c in config],
+                    metadata=[c.get(&#34;metadata&#34;) for c in config],
+                    run_name=[c.get(&#34;run_name&#34;) for c in config],
+                    **kwargs,
+                )
+                return [g[0] for g in llm_result.generations]
+            except Exception as e:
+                if return_exceptions:
+                    return cast(List[str], [e for _ in inputs])
+                else:
+                    raise e
+        else:
+            batches = [
+                inputs[i : i + max_concurrency]
+                for i in range(0, len(inputs), max_concurrency)
+            ]
+            config = [{**c, &#34;max_concurrency&#34;: None} for c in config]  # type: ignore[misc]
+            return [
+                output
+                for i, batch in enumerate(batches)
+                for output in await self.abatch(
+                    batch,
+                    config=config[i * max_concurrency : (i + 1) * max_concurrency],
+                    return_exceptions=return_exceptions,
+                    **kwargs,
+                )
+            ]</code></pre>
+</details>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>langchain_huggingface.llms.huggingface_pipeline.HuggingFacePipeline</li>
+<li>langchain_core.language_models.llms.BaseLLM</li>
+<li>langchain_core.language_models.base.BaseLanguageModel</li>
+<li>langchain_core.runnables.base.RunnableSerializable</li>
+<li>langchain_core.load.serializable.Serializable</li>
+<li>pydantic.v1.main.BaseModel</li>
+<li>pydantic.v1.utils.Representation</li>
+<li>langchain_core.runnables.base.Runnable</li>
+<li>typing.Generic</li>
+<li>abc.ABC</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="selection.completion_llms.HuggingFacePipelineFixed.abatch"><code class="name flex">
+<span>async def <span class="ident">abatch</span></span>(<span>self, inputs, config=None, *, return_exceptions: bool = False, **kwargs: Any) ‑> List[str]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Default implementation runs ainvoke in parallel using asyncio.gather.</p>
+<p>The default implementation of batch works well for IO bound runnables.</p>
+<p>Subclasses should override this method if they can batch more efficiently;
+e.g., if the underlying Runnable uses an API which supports a batch mode.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>inputs</code></strong></dt>
+<dd>A list of inputs to the Runnable.</dd>
+<dt><strong><code>config</code></strong></dt>
+<dd>A config to use when invoking the Runnable.
+The config supports standard keys like 'tags', 'metadata' for tracing
+purposes, 'max_concurrency' for controlling how much work to do
+in parallel, and other keys. Please refer to the RunnableConfig
+for more details. Defaults to None.</dd>
+<dt><strong><code>return_exceptions</code></strong></dt>
+<dd>Whether to return exceptions instead of raising them.
+Defaults to False.</dd>
+<dt><strong><code>kwargs</code></strong></dt>
+<dd>Additional keyword arguments to pass to the Runnable.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<p>A list of outputs from the Runnable.</p></div>
+</dd>
+</dl>
+</dd>
 <dt id="selection.completion_llms.OpenAICompletion"><code class="flex name class">
 <span>class <span class="ident">OpenAICompletion</span></span>
 <span>(</span><span>*args: Any, **kwargs: Any)</span>
@@ -308,6 +469,7 @@ model = Together(model_name="mistralai/Mixtral-8x7B-Instruct-v0.1")
 </summary>
 <pre><code class="python">class TogetherLLMCompletion(Together):
     echo : bool = False
+    stop : Optional[List[str]] = None
 
     @property
     def default_params(self) -&gt; Dict[str, Any]:
@@ -316,7 +478,7 @@ model = Together(model_name="mistralai/Mixtral-8x7B-Instruct-v0.1")
         Returns:
             A dictionary containing the default parameters.
         &#34;&#34;&#34;
-        return {
+        kwargs = {
             &#34;model&#34;: self.model,
             &#34;temperature&#34;: self.temperature,
             &#34;top_p&#34;: self.top_p,
@@ -326,6 +488,7 @@ model = Together(model_name="mistralai/Mixtral-8x7B-Instruct-v0.1")
             &#34;logprobs&#34;: self.logprobs,
             &#34;echo&#34;: self.echo
         }
+        return kwargs
     
     async def _acall(self, prompt, stop=None, run_manager=None, **kwargs) -&gt; str:
         &#34;&#34;&#34;Call Together model to get predictions based on the prompt.
@@ -344,6 +507,9 @@ model = Together(model_name="mistralai/Mixtral-8x7B-Instruct-v0.1")
             &#34;Content-Type&#34;: &#34;application/json&#34;,
         }
         stop_to_use = stop[0] if stop and len(stop) == 1 else stop
+        if self.stop is not None:
+            stop_to_use = self.stop
+
         payload = {
             **self.default_params,
             &#34;prompt&#34;: prompt,
@@ -471,6 +637,10 @@ model = Together(model_name="mistralai/Mixtral-8x7B-Instruct-v0.1")
 <dd>
 <div class="desc"></div>
 </dd>
+<dt id="selection.completion_llms.TogetherLLMCompletion.stop"><code class="name">var <span class="ident">stop</span> : Optional[List[str]]</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
 </dl>
 <h3>Instance variables</h3>
 <dl>
@@ -490,7 +660,7 @@ def default_params(self) -&gt; Dict[str, Any]:
     Returns:
         A dictionary containing the default parameters.
     &#34;&#34;&#34;
-    return {
+    kwargs = {
         &#34;model&#34;: self.model,
         &#34;temperature&#34;: self.temperature,
         &#34;top_p&#34;: self.top_p,
@@ -499,7 +669,8 @@ def default_params(self) -&gt; Dict[str, Any]:
         &#34;repetition_penalty&#34;: self.repetition_penalty,
         &#34;logprobs&#34;: self.logprobs,
         &#34;echo&#34;: self.echo
-    }</code></pre>
+    }
+    return kwargs</code></pre>
 </details>
 </dd>
 </dl>
@@ -553,6 +724,12 @@ Defaults to False.</dd>
 <h4><code><a title="selection.completion_llms.AnthropicLLMCompletion" href="#selection.completion_llms.AnthropicLLMCompletion">AnthropicLLMCompletion</a></code></h4>
 </li>
 <li>
+<h4><code><a title="selection.completion_llms.HuggingFacePipelineFixed" href="#selection.completion_llms.HuggingFacePipelineFixed">HuggingFacePipelineFixed</a></code></h4>
+<ul class="">
+<li><code><a title="selection.completion_llms.HuggingFacePipelineFixed.abatch" href="#selection.completion_llms.HuggingFacePipelineFixed.abatch">abatch</a></code></li>
+</ul>
+</li>
+<li>
 <h4><code><a title="selection.completion_llms.OpenAICompletion" href="#selection.completion_llms.OpenAICompletion">OpenAICompletion</a></code></h4>
 <ul class="">
 <li><code><a title="selection.completion_llms.OpenAICompletion.abatch" href="#selection.completion_llms.OpenAICompletion.abatch">abatch</a></code></li>
@@ -564,6 +741,7 @@ Defaults to False.</dd>
 <li><code><a title="selection.completion_llms.TogetherLLMCompletion.abatch" href="#selection.completion_llms.TogetherLLMCompletion.abatch">abatch</a></code></li>
 <li><code><a title="selection.completion_llms.TogetherLLMCompletion.default_params" href="#selection.completion_llms.TogetherLLMCompletion.default_params">default_params</a></code></li>
 <li><code><a title="selection.completion_llms.TogetherLLMCompletion.echo" href="#selection.completion_llms.TogetherLLMCompletion.echo">echo</a></code></li>
+<li><code><a title="selection.completion_llms.TogetherLLMCompletion.stop" href="#selection.completion_llms.TogetherLLMCompletion.stop">stop</a></code></li>
 </ul>
 </li>
 </ul>

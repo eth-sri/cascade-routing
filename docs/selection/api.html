@@ -37,7 +37,7 @@ hljs.highlightAll();
 <dl>
 <dt id="selection.api.APIQuery"><code class="flex name class">
 <span>class <span class="ident">APIQuery</span></span>
-<span>(</span><span>model, timeout=30, temperature=0, max_tokens=256, return_logprobs=False, api='openai', chat=True, max_retries=20, requests_per_second=30, check_every_n_seconds=0.1, read_cost=None, write_cost=None, **kwargs)</span>
+<span>(</span><span>model, timeout=30, temperature=0, max_tokens=256, return_logprobs=False, api='openai', chat=True, max_retries=20, requests_per_second=30, check_every_n_seconds=0.1, read_cost=None, write_cost=None, sequential=False, **kwargs)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Initializes an instance of the API class.</p>
@@ -67,6 +67,8 @@ hljs.highlightAll();
 <dd>The cost of read operations. Defaults to None.</dd>
 <dt><strong><code>write_cost</code></strong> :&ensp;<code>float</code>, optional</dt>
 <dd>The cost of write operations. Defaults to None.</dd>
+<dt><strong><code>sequential</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>Whether to run queries sequentially. Defaults to False.</dd>
 <dt><strong><code>**kwargs</code></strong></dt>
 <dd>Additional keyword arguments for the API model.</dd>
 </dl>
@@ -89,6 +91,7 @@ hljs.highlightAll();
                  check_every_n_seconds=0.1,
                  read_cost=None,  
                  write_cost=None, 
+                 sequential=False,
                  **kwargs):
         &#34;&#34;&#34;
         Initializes an instance of the API class.
@@ -105,6 +108,7 @@ hljs.highlightAll();
             check_every_n_seconds (float, optional): The interval for checking rate limits. Defaults to 0.1.
             read_cost (float, optional): The cost of read operations. Defaults to None.
             write_cost (float, optional): The cost of write operations. Defaults to None.
+            sequential (bool, optional): Whether to run queries sequentially. Defaults to False.
             **kwargs: Additional keyword arguments for the API model.
         Returns:
             None
@@ -114,6 +118,7 @@ hljs.highlightAll();
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.kwargs = kwargs
+        self.tokenizer = None
         if read_cost is None:
             self.read_cost = 1
             self.write_cost = 1
@@ -121,6 +126,7 @@ hljs.highlightAll();
             self.read_cost = read_cost
             self.write_cost = write_cost
         self.max_retries = max_retries
+        self.sequential = sequential
         self.api = api
         self.chat = chat
         self.timeout = timeout
@@ -144,10 +150,24 @@ hljs.highlightAll();
                                         rate_limiter=self.rate_limiter, 
                                         api_key=os.getenv(&#39;OPENAI_API_KEY&#39;), seed=0, 
                                         stream_usage=True, **self.kwargs)
+        if self.api == &#39;hyperbolic&#39; and self.chat:
+            self.api_model = ChatOpenAI(model=self.model, max_retries=self.max_retries, 
+                                        temperature=self.temperature,
+                                        timeout=self.timeout, max_tokens=self.max_tokens, 
+                                        rate_limiter=self.rate_limiter, 
+                                        api_key=os.getenv(&#39;HYPERBOLIC_API_KEY&#39;), seed=0,
+                                        base_url=&#34;https://api.hyperbolic.xyz/v1&#34;, 
+                                        stream_usage=True, **self.kwargs)
         elif self.api == &#39;openai&#39; and not self.chat:
             self.api_model = OpenAICompletion(model=self.model, temperature=self.temperature,
                                               max_tokens=self.max_tokens, 
                                               api_key=os.getenv(&#39;OPENAI_API_KEY&#39;), seed=0, 
+                                              **self.kwargs)
+        elif self.api == &#39;hyperbolic&#39; and not self.chat:
+            self.api_model = OpenAICompletion(model=self.model, temperature=self.temperature,
+                                              max_tokens=self.max_tokens, 
+                                              api_key=os.getenv(&#39;HYPERBOLIC_API_KEY&#39;), seed=0,
+                                              base_url=&#34;https://api.hyperbolic.xyz/v1&#34;, 
                                               **self.kwargs)
         elif self.api == &#39;anthropic&#39; and self.chat:
             self.api_model = ChatAnthropic(model_name=self.model, temperature=self.temperature,
@@ -170,6 +190,35 @@ hljs.highlightAll();
                                                     timeout=self.timeout, max_tokens=self.max_tokens, 
                                                     api_key=os.getenv(&#39;GOOGLE_API_KEY&#39;), 
                                                     stream_usage=True, **self.kwargs)
+        elif self.api == &#39;huggingface&#39;:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model, padding_side=&#39;left&#39;, trust_remote_code=True)
+            try:
+                model = AutoModelForCausalLM.from_pretrained(self.model, trust_remote_code=True)
+            except:
+                model = AutoModelForCausalLM.from_pretrained(self.model, trust_remote_code=False, 
+                                                             attn_implementation=&#34;eager&#34;)
+            device = &#39;cuda&#39; if torch.cuda.is_available() else &#39;cpu&#39;
+            model.generation_config.eos_token_id = self.tokenizer.eos_token_id
+            model.config.eos_token_id = self.tokenizer.eos_token_id
+            model.to(device)
+            kwargs = self.kwargs.copy()
+            if &#39;sequential&#39; in kwargs:
+                kwargs.pop(&#39;sequential&#39;)
+            if &#34;echo&#34; in kwargs:
+                kwargs.pop(&#34;echo&#34;)
+            if &#34;logprobs&#34; in kwargs:
+                kwargs.pop(&#34;logprobs&#34;)
+            pipeline_chat = LogProbsTextGenerationPipeline(
+                                model=model,
+                                tokenizer=self.tokenizer, 
+                                device=&#39;cuda&#39;, 
+                                max_new_tokens=self.max_tokens,
+                                do_sample=True if self.temperature &gt; 0 else False,
+                                temperature=self.temperature,
+                                return_full_text=False,
+                                **kwargs
+                            )
+            self.api_model = HuggingFacePipelineFixed(pipeline=pipeline_chat)
         else:
             raise ValueError(f&#39;API {self.api} not supported or chat {self.chat} not supported&#39;)
         
@@ -189,28 +238,56 @@ hljs.highlightAll();
         Raises:
             ValueError: If the query type is not supported.
         &#34;&#34;&#34;
-        retry_api_model = self.api_model.with_retry(stop_after_attempt=self.max_retries)
+        retry_api_model = self.api_model
         if self.chat:
             queries_converted = []
-            for query in queries:
-                current_query = []
-                for query_type, query_message in query:
-                    if query_type == &#39;system&#39;:
-                        current_query.append(SystemMessage(content=query_message))
-                    elif query_type == &#39;ai&#39;:
-                        current_query.append(AIMessage(content=query_message))
-                    elif query_type == &#39;human&#39;:
-                        current_query.append(HumanMessage(content=query_message))
-                    else:
-                        raise ValueError(f&#39;Query type {query_type} not supported&#39;)
-                queries_converted.append(current_query)
+            if self.api == &#39;huggingface&#39;:
+                for query in queries:
+                    current_query = []
+                    for query_type, query_message in query:
+                        if query_type == &#39;system&#39;:
+                            current_query.append({
+                                &#39;role&#39;: &#39;system&#39;,
+                                &#39;content&#39;: query_message
+                            })
+                        elif query_type == &#39;ai&#39;:
+                            current_query.append({
+                                &#39;role&#39;: &#39;assistant&#39;,
+                                &#39;content&#39;: query_message
+                            })
+                        elif query_type == &#39;human&#39;:
+                            current_query.append({
+                                &#39;role&#39;: &#39;user&#39;,
+                                &#39;content&#39;: query_message
+                            })
+                    current_query = self.tokenizer.apply_chat_template(current_query, tokenize=False)
+                    queries_converted.append(current_query)
+            else:
+                for query in queries:
+                    current_query = []
+                    for query_type, query_message in query:
+                        if query_type == &#39;system&#39;:
+                            current_query.append(SystemMessage(content=query_message))
+                        elif query_type == &#39;ai&#39;:
+                            current_query.append(AIMessage(content=query_message))
+                        elif query_type == &#39;human&#39;:
+                            current_query.append(HumanMessage(content=query_message))
+                        else:
+                            raise ValueError(f&#39;Query type {query_type} not supported&#39;)
+                    queries_converted.append(current_query)
         else:
             queries_converted = queries
 
-        results = await self._run_with_rate_limiting(retry_api_model.abatch, 
+        if self.sequential:
+            results, times = await self.run_sequential_queries(retry_api_model.abatch,  
+                                                               queries_converted)
+        else:
+            results = await self._run_with_rate_limiting(retry_api_model.abatch, 
                                                      queries_converted)
+            times = [0] * len(results)
         results = self.unify_output_format(results)
         cost, detailed_cost = self.get_cost(results)
+        detailed_cost = [{&#39;time&#39;: time, **detailed} for time, detailed in zip(times, detailed_cost)]
         outputs = [result[&#39;content&#39;] for result in results]
         if self.return_logprobs:
             logprob_info = self.get_logprobs(results)
@@ -231,6 +308,21 @@ hljs.highlightAll();
         &#34;&#34;&#34;
         unified_results = []
         for result in results:
+            if result is None:
+                unified_results.append({
+                    &#39;content&#39;: &#39;&#39;,
+                    &#39;usage_metadata&#39;: {
+                        &#39;input_tokens&#39;: 0,
+                        &#39;output_tokens&#39;: 0
+                    },
+                    &#34;response_metadata&#34;: {
+                        &#34;logprobs&#34;: {
+                            &#34;tokens&#34;: [],
+                            &#34;token_logprobs&#34;: []
+                        }
+                    }
+                })
+                continue
             if not isinstance(result, dict):
                 result = dict(result)
             if &#39;generation_info&#39; in result:
@@ -249,8 +341,16 @@ hljs.highlightAll();
             None
         &#34;&#34;&#34;
         if self.api == &#39;huggingface&#39;:
+            logprob_info = []
+            
+            for result in results:
+                logprob_info.append((
+                    result[&#39;tokens&#39;], 
+                    result[&#39;logprobs&#39;]
+                ))
             logprob_info = [
-                [[(key, val) for key, val in result[&#39;logprobs&#39;].items()]] for result in results
+                [[(token, logprob)] for token, logprob in zip(result[0], result[1])]
+                for result in logprob_info
             ]
         if self.api == &#39;together&#39;:
             logprob_info = []
@@ -277,7 +377,32 @@ hljs.highlightAll();
                 logprob_info.append(result_specific_logprob)
         return logprob_info
 
-    
+    async def run_sequential_queries(self, func, queries):
+        &#34;&#34;&#34;
+        Run queries sequentially against the API model.
+
+        Args:
+            func (callable): The function to be executed.
+            queries (list): A list of queries to be executed
+        Returns:
+            results and times
+        &#34;&#34;&#34;
+        results = []
+        times = []
+        for query in tqdm(queries):
+            time_start = time.time()
+            for _ in range(self.max_retries):
+                try:
+                    result = await func([query])
+                    break
+                except Exception as e:
+                    print(&#39;Traceback: &#39;, e)
+                    continue
+            time_end = time.time()
+            results.extend(result)
+            times.append(time_end - time_start)
+        return results, times
+
     async def _run_with_rate_limiting(self, func, queries):
         &#34;&#34;&#34;
         Runs the given function with rate limiting.
@@ -293,9 +418,21 @@ hljs.highlightAll();
         for i in tqdm(range(0, len(queries), self.rate_limiter.max_bucket_size), 
                       desc=&#39;Running queries&#39;):
             batch = queries[i:i + self.rate_limiter.max_bucket_size]
-            while not self.rate_limiter.acquire():
-                continue
-            results.extend(await func(batch))
+            if self.api != &#39;huggingface&#39;:
+                while not self.rate_limiter.acquire():
+                    continue
+            n_retries = 0
+            for i in range(self.max_retries):
+                try:
+                    results.extend(await func(batch))
+                    break
+                except Exception as e:
+                    print(f&#39;Error: {e}&#39;)
+                    n_retries += 1
+                    continue
+            if n_retries == self.max_retries:
+                print(&#39;Failed to get response after max retries&#39;)
+                results.extend([None] * len(batch))
         return results
 
     def get_cost(self, results):
@@ -397,6 +534,21 @@ Detailed cost is a list of dictionaries containing the same information for each
 <dd>If the query type is not supported.</dd>
 </dl></div>
 </dd>
+<dt id="selection.api.APIQuery.run_sequential_queries"><code class="name flex">
+<span>async def <span class="ident">run_sequential_queries</span></span>(<span>self, func, queries)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Run queries sequentially against the API model.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>func</code></strong> :&ensp;<code>callable</code></dt>
+<dd>The function to be executed.</dd>
+<dt><strong><code>queries</code></strong> :&ensp;<code>list</code></dt>
+<dd>A list of queries to be executed</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<p>results and times</p></div>
+</dd>
 <dt id="selection.api.APIQuery.unify_output_format"><code class="name flex">
 <span>def <span class="ident">unify_output_format</span></span>(<span>self, results)</span>
 </code></dt>
@@ -414,6 +566,168 @@ Detailed cost is a list of dictionaries containing the same information for each
 </dl></div>
 </dd>
 </dl>
+</dd>
+<dt id="selection.api.LogProbsTextGenerationPipeline"><code class="flex name class">
+<span>class <span class="ident">LogProbsTextGenerationPipeline</span></span>
+<span>(</span><span>*args, **kwargs)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Language generation pipeline using any <code>ModelWithLMHead</code>. This pipeline predicts the words that will follow a
+specified text prompt. When the underlying model is a conversational model, it can also accept one or more chats,
+in which case the pipeline will operate in chat mode and will continue the chat(s) by adding its response(s).
+Each chat takes the form of a list of dicts, where each dict contains "role" and "content" keys.</p>
+<p>Examples:</p>
+<pre><code class="language-python">&gt;&gt;&gt; from transformers import pipeline
+
+&gt;&gt;&gt; generator = pipeline(model=&quot;openai-community/gpt2&quot;)
+&gt;&gt;&gt; generator(&quot;I can't believe you did such a &quot;, do_sample=False)
+[{'generated_text': &quot;I can't believe you did such a icky thing to me. I'm so sorry. I'm so sorry. I'm so sorry. I'm so sorry. I'm so sorry. I'm so sorry. I'm so sorry. I&quot;}]
+
+&gt;&gt;&gt; # These parameters will return suggestions, and only the newly created text making it easier for prompting suggestions.
+&gt;&gt;&gt; outputs = generator(&quot;My tart needs some&quot;, num_return_sequences=4, return_full_text=False)
+</code></pre>
+<pre><code class="language-python">&gt;&gt;&gt; from transformers import pipeline
+
+&gt;&gt;&gt; generator = pipeline(model=&quot;HuggingFaceH4/zephyr-7b-beta&quot;)
+&gt;&gt;&gt; # Zephyr-beta is a conversational model, so let's pass it a chat instead of a single string
+&gt;&gt;&gt; generator([{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;What is the capital of France? Answer in one word.&quot;}], do_sample=False, max_new_tokens=2)
+[{'generated_text': [{'role': 'user', 'content': 'What is the capital of France? Answer in one word.'}, {'role': 'assistant', 'content': 'Paris'}]}]
+</code></pre>
+<p>Learn more about the basics of using a pipeline in the <a href="../pipeline_tutorial">pipeline tutorial</a>. You can pass text
+generation parameters to this pipeline to control stopping criteria, decoding strategy, and more. Learn more about
+text generation parameters in <a href="../generation_strategies">Text generation strategies</a> and <a href="text_generation">Text
+generation</a>.</p>
+<p>This language generation pipeline can currently be loaded from [<code>pipeline</code>] using the following task identifier:
+<code>"text-generation"</code>.</p>
+<p>The models that this pipeline can use are models that have been trained with an autoregressive language modeling
+objective. See the list of available <a href="https://huggingface.co/models?filter=text-generation">text completion models</a>
+and the list of <a href="https://huggingface.co/models?other=conversational">conversational models</a>
+on [huggingface.co/models].</p>
+<h2 id="arguments">Arguments</h2>
+<p>model ([<code>PreTrainedModel</code>] or [<code>TFPreTrainedModel</code>]):
+The model that will be used by the pipeline to make predictions. This needs to be a model inheriting from
+[<code>PreTrainedModel</code>] for PyTorch and [<code>TFPreTrainedModel</code>] for TensorFlow.
+tokenizer ([<code>PreTrainedTokenizer</code>]):
+The tokenizer that will be used by the pipeline to encode data for the model. This object inherits from
+[<code>PreTrainedTokenizer</code>].
+modelcard (<code>str</code> or [<code>ModelCard</code>], <em>optional</em>):
+Model card attributed to the model for this pipeline.
+framework (<code>str</code>, <em>optional</em>):
+The framework to use, either <code>"pt"</code> for PyTorch or <code>"tf"</code> for TensorFlow. The specified framework must be
+installed.</p>
+<pre><code>If no framework is specified, will default to the one currently installed. If no framework is specified and
+both frameworks are installed, will default to the framework of the &lt;code&gt;model&lt;/code&gt;, or to PyTorch if no model is
+provided.
+</code></pre>
+<p>task (<code>str</code>, defaults to <code>""</code>):
+A task-identifier for the pipeline.
+num_workers (<code>int</code>, <em>optional</em>, defaults to 8):
+When the pipeline will use <em>DataLoader</em> (when passing a dataset, on GPU for a Pytorch model), the number of
+workers to be used.
+batch_size (<code>int</code>, <em>optional</em>, defaults to 1):
+When the pipeline will use <em>DataLoader</em> (when passing a dataset, on GPU for a Pytorch model), the size of
+the batch to use, for inference this is not always beneficial, please read <a href="https://huggingface.co/transformers/main_classes/pipelines.html#pipeline-batching">Batching with
+pipelines</a> .
+args_parser ([<code>~pipelines.ArgumentHandler</code>], <em>optional</em>):
+Reference to the object in charge of parsing supplied pipeline parameters.
+device (<code>int</code>, <em>optional</em>, defaults to -1):
+Device ordinal for CPU/GPU supports. Setting this to -1 will leverage CPU, a positive will run the model on
+the associated CUDA device id. You can pass native <code>torch.device</code> or a <code>str</code> too
+torch_dtype (<code>str</code> or <code>torch.dtype</code>, <em>optional</em>):
+Sent directly as <code>model_kwargs</code> (just a simpler shortcut) to use the available precision for this model
+(<code>torch.float16</code>, <code>torch.bfloat16</code>, &hellip; or <code>"auto"</code>)
+binary_output (<code>bool</code>, <em>optional</em>, defaults to <code>False</code>):
+Flag indicating if the output the pipeline should happen in a serialized format (i.e., pickle) or as
+the raw output data e.g. text.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class LogProbsTextGenerationPipeline(TextGenerationPipeline):
+    def __call__(self, input_texts, *args, **kwargs):
+        &#34;&#34;&#34;
+        Process a batch of input texts and return generated text, log probabilities,
+        and tokenized representations for both input and output tokens.
+
+        Args:
+            input_texts (list): List of input strings to process.
+
+        Returns:
+            list[dict]: A list of dictionaries, each containing:
+                - `generated_text`: The generated text string.
+                - `all_tokens`: Combined list of input and output tokens.
+                - `log_probs`: Log probabilities for each token in `all_tokens`.
+        &#34;&#34;&#34;
+        # Tokenize all inputs for batching
+        inputs = self.tokenizer(input_texts, return_tensors=&#34;pt&#34;, padding=True, truncation=True).to(self.device)
+
+        # Forward pass to compute logits for input tokens
+        with torch.no_grad():
+            input_outputs = self.model(**inputs)
+            input_logits = input_outputs.logits
+
+        # Compute log probabilities for input tokens
+        input_log_probs = F.log_softmax(input_logits, dim=-1)
+
+        # Generate output tokens in a batched manner
+        model_outputs = self.model.generate(
+            input_ids=inputs.input_ids,
+            attention_mask=inputs.attention_mask,
+            output_scores=True,
+            return_dict_in_generate=True,
+            **self._forward_params
+        )
+
+        # Extract sequences and scores (logits)
+        generated_ids = model_outputs.sequences
+        logits = model_outputs.scores
+
+        # Process each input in the batch
+        results = []
+        for batch_idx in range(len(input_texts)):
+            input_length = inputs.input_ids[batch_idx].shape[0]
+
+            # Input tokens and their log probabilities
+            input_tokens = self.tokenizer.convert_ids_to_tokens(inputs.input_ids[batch_idx].tolist())
+            input_log_probs_batch = [0] + [
+                input_log_probs[batch_idx, i, token_id].item()
+                for i, token_id in enumerate(inputs.input_ids[batch_idx][1:])
+            ]
+
+            # Generated tokens and their log probabilities
+            generated_tokens = self.tokenizer.convert_ids_to_tokens(generated_ids[batch_idx].tolist())
+            generated_log_probs = []
+            for i, step_logits in enumerate(logits):
+                step_log_probs = F.log_softmax(step_logits, dim=-1)
+                token_id = generated_ids[batch_idx, input_length + i]
+                token_log_prob = step_log_probs[batch_idx, token_id].item()
+                generated_log_probs.append(token_log_prob)
+
+            # Combine input and output tokens and log probabilities
+            all_tokens = input_tokens + generated_tokens[input_length:]
+            log_probs = input_log_probs_batch + generated_log_probs
+
+            # Decode the generated text
+            generated_text = self.tokenizer.decode(generated_ids[batch_idx], skip_special_tokens=True)
+            results.append({
+                &#34;content&#34;: generated_text,
+                &#34;tokens&#34;: all_tokens,
+                &#34;logprobs&#34;: log_probs,
+                &#34;usage_metadata&#34;: {
+                    &#34;input_tokens&#34;: len(input_tokens),
+                    &#34;output_tokens&#34;: len(generated_tokens) - len(input_tokens)
+                }
+            })
+        return results</code></pre>
+</details>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>transformers.pipelines.text_generation.TextGenerationPipeline</li>
+<li>transformers.pipelines.base.Pipeline</li>
+<li>transformers.pipelines.base._ScikitCompat</li>
+<li>abc.ABC</li>
+<li>transformers.utils.hub.PushToHubMixin</li>
+</ul>
 </dd>
 </dl>
 </section>
@@ -437,8 +751,12 @@ Detailed cost is a list of dictionaries containing the same information for each
 <li><code><a title="selection.api.APIQuery.get_logprobs" href="#selection.api.APIQuery.get_logprobs">get_logprobs</a></code></li>
 <li><code><a title="selection.api.APIQuery.initialize_api_model" href="#selection.api.APIQuery.initialize_api_model">initialize_api_model</a></code></li>
 <li><code><a title="selection.api.APIQuery.run_queries" href="#selection.api.APIQuery.run_queries">run_queries</a></code></li>
+<li><code><a title="selection.api.APIQuery.run_sequential_queries" href="#selection.api.APIQuery.run_sequential_queries">run_sequential_queries</a></code></li>
 <li><code><a title="selection.api.APIQuery.unify_output_format" href="#selection.api.APIQuery.unify_output_format">unify_output_format</a></code></li>
 </ul>
+</li>
+<li>
+<h4><code><a title="selection.api.LogProbsTextGenerationPipeline" href="#selection.api.LogProbsTextGenerationPipeline">LogProbsTextGenerationPipeline</a></code></h4>
 </li>
 </ul>
 </li>

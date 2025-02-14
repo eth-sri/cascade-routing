@@ -1,5 +1,7 @@
 from . import ClassificationCostComputer, GroundTruthQualityComputer, ClassificationQualityComputer, CascadeRouter, Router, ConstantStrategy, HyperoptStrategy, BaselineCascader, GroundTruthCostComputer
 from .open_form import OpenFormCostComputer, OpenFormQualityComputer
+from .swebench import SWEBenchCostComputer, SWEBenchQualityComputer
+from .code_math import CodeMathCostComputer, CodeMathQualityComputer
 import numpy as np
 import os
 from scipy.interpolate import interp1d
@@ -106,6 +108,8 @@ def prediction(cascader, questions, qualities, costs,
         'mean_times': float(np.mean(timings)),
         'median_times': float(np.median(timings)),
         'max_times': float(np.max(timings)),
+        "quality_all": qualities_output,
+        "cost_all": costs_output,
     }
 
 def remove_redundant_models(qualities, costs, model_indices=None):
@@ -159,11 +163,16 @@ def area_under_curve(y, x, x_min, x_max, y_min_base):
     """
     x = np.array(x)
     y = np.array(y)
-    interp_func = interp1d(x, y, kind='linear', fill_value="extrapolate")
-
+    # drop indices where (x_i, y_i) is a duplicate
+    combined = np.array(list(zip(x, y)))
+    unique = np.unique(combined, axis=0)
+    x = unique[:, 0]
+    y = unique[:, 1]
+    # sort by x
     sorted_indices = np.argsort(x)
     x = x[sorted_indices]
     y = y[sorted_indices]
+    interp_func = interp1d(x, y, kind='linear', fill_value="extrapolate")
 
     if x[-1] < x_max:
         x = np.append(x, x_max)
@@ -239,7 +248,7 @@ def auc_all(qualities, costs, baseline_qualities, baseline_costs):
     auc = area_under_curve(qualities, costs, cheapest, most_expensive, cheapest_quality)
     return {
         'auc': auc,
-        'max_diff': max_diff(qualities, costs, baseline_qualities, baseline_costs)
+        'max_diff': max_diff(qualities, costs, baseline_qualities, baseline_costs),
     }
 
 def test_router(models, max_cost, train_model_answers, train_costs, train_qualities, train_queries,
@@ -250,9 +259,12 @@ def test_router(models, max_cost, train_model_answers, train_costs, train_qualit
                 is_cascader_ours=False, force_order=False,
                 max_depth=None, n_samples=100, 
                 ground_truth_noise_before=None, ground_truth_noise_after=None, 
-                do_speedup=True,
+                do_speedup=True, is_latency_cost=False,
                 set_sigma_none=False, is_classification=True, 
                 cost_noise_before=None, cost_noise_after=None,
+                is_swebench=False,
+                is_code_math=False,
+                access_tests=True,
                 ground_truth_cost_computer=False, is_routerbench=False,
                 cascade_strategies=[
                     lambda max_lambda: ConstantStrategy(max_lambda, n_iterations=30),
@@ -331,7 +343,18 @@ def test_router(models, max_cost, train_model_answers, train_costs, train_qualit
             output_costs=[model['write_cost'] for model in models],
             tokenizers=tokenizers,
             constant_cost=assume_constant,
+            is_latency_cost=is_latency_cost,
             store_all=True
+        )
+    elif is_swebench:
+        cost_computer = SWEBenchCostComputer(
+            store_all=True,
+            constant_cost=assume_constant,
+        )
+    elif is_code_math:
+        cost_computer = CodeMathCostComputer(
+            store_all=True,
+            constant_cost=assume_constant,
         )
     else:
         model_names_huggingface = [model.get('huggingface_name', model['name']) for model in models]
@@ -341,22 +364,37 @@ def test_router(models, max_cost, train_model_answers, train_costs, train_qualit
             output_costs=[model['write_cost'] for model in models],
             tokenizers=tokenizers,
             constant_cost=assume_constant,
+            is_latency_cost=is_latency_cost,
             store_all=True
         )
 
     if ground_truth_noise_before is None:
-        quality_class = ClassificationQualityComputer if is_classification else OpenFormQualityComputer
-        quality_computer = quality_class(
-            model_class=model_class,
-            n_highest_include=n_highest_include,
-            require_constant_not_run=is_cascader,
-            add_entropy=True,
-            add_equal_argmax=True,
-            add_js_divergence=True,
-            n_samples=n_samples,
-            store_all=True,
-            max_depth=(max_depth if not is_cascader else None),
-        )
+        if is_swebench:
+            quality_computer = SWEBenchQualityComputer(
+                max_depth=(max_depth if not is_cascader else None),
+                n_samples=n_samples,
+                require_constant_not_run=is_cascader,
+                access_tests=access_tests
+            )
+        elif is_code_math:
+            quality_computer = CodeMathQualityComputer(
+                max_depth=(max_depth if not is_cascader else None),
+                n_samples=n_samples,
+                require_constant_not_run=is_cascader
+            )
+        else:
+            quality_class = ClassificationQualityComputer if is_classification else OpenFormQualityComputer
+            quality_computer = quality_class(
+                model_class=model_class,
+                n_highest_include=n_highest_include,
+                require_constant_not_run=is_cascader,
+                add_entropy=True,
+                add_equal_argmax=True,
+                add_js_divergence=True,
+                n_samples=n_samples,
+                store_all=True,
+                max_depth=(max_depth if not is_cascader else None),
+            )
     else:
         quality_computer = GroundTruthQualityComputer(
             noise_before_run=ground_truth_noise_before,
@@ -368,6 +406,12 @@ def test_router(models, max_cost, train_model_answers, train_costs, train_qualit
                           train_costs_here[:train_split])
     else:
         cost_computer.fit(
+            np.concatenate([train_queries, test_queries], axis=0),
+            np.concatenate([train_model_answers_here, test_model_answers_here], axis=0),
+            np.concatenate([train_costs_here, test_costs_here], axis=0)
+        )
+    if is_latency_cost:
+        cost_computer.add_latency_ground_truths(
             np.concatenate([train_queries, test_queries], axis=0),
             np.concatenate([train_model_answers_here, test_model_answers_here], axis=0),
             np.concatenate([train_costs_here, test_costs_here], axis=0)
@@ -500,7 +544,9 @@ def prepare_results(results):
         'lambdas': [result['lambdas'] for result in results],
         'mean_times': [result['mean_times'] for result in results],
         'median_times': [result['median_times'] for result in results],
-        'max_times': [result['max_times'] for result in results]
+        'max_times': [result['max_times'] for result in results],
+        "quality_all": [result["quality_all"] for result in results],
+        "cost_all": [result["cost_all"] for result in results],
     }
 
     all_results_indices = np.argsort(all_results_test['cost'])
@@ -509,10 +555,16 @@ def prepare_results(results):
     all_results_test['models_run'] = np.array(all_results_test['models_run'])[all_results_indices].tolist()
     all_results_test['selected_models'] = np.array(all_results_test['selected_models'])[all_results_indices].tolist()
     all_results_test['lambdas'] = np.array(all_results_test['lambdas'])[all_results_indices].tolist()
+    all_results_test['mean_times'] = np.array(all_results_test['mean_times'])[all_results_indices].tolist()
+    all_results_test['median_times'] = np.array(all_results_test['median_times'])[all_results_indices].tolist()
+    all_results_test['max_times'] = np.array(all_results_test['max_times'])[all_results_indices].tolist()
+    all_results_test['quality_all'] = np.array(all_results_test['quality_all'])[all_results_indices].tolist()
+    all_results_test['cost_all'] = np.array(all_results_test['cost_all'])[all_results_indices].tolist()
     return all_results_test
                 
 def test_everything(models, test_costs_averaged, test_qualities_averaged, n_iterations=5, 
-                     no_router=False, no_cascade=False, no_cascade_router=False, 
+                     no_router=False, no_cascade=False, no_cascade_router=False,
+                     assume_constant=False, use_sum_costs=False,
                      **kwargs):
     """
     Test the performance of different models using various configurations.
@@ -544,18 +596,24 @@ def test_everything(models, test_costs_averaged, test_qualities_averaged, n_iter
             - 'aucs_cascade_ours': AUC scores for our cascade testing.
     """
     model_names = [model['name'] for model in models]
-    sorted_costs = sorted([test_costs_averaged[name] for name in model_names])
-    _, costs_not_redundant, _ = remove_redundant_models([test_qualities_averaged[name] for name in model_names], 
-                                                        [test_costs_averaged[name] for name in model_names])
-    sorted_costs = sorted(costs_not_redundant)
-    lin_spaces = [
-        np.linspace(sorted_costs[i], sorted_costs[i+1], n_iterations) for i in range(len(sorted_costs) - 1)
-    ]
-    max_cost_space = np.concatenate(lin_spaces)
+    if not use_sum_costs:
+        sorted_costs = sorted([test_costs_averaged[name] for name in model_names])
+        _, costs_not_redundant, _ = remove_redundant_models([test_qualities_averaged[name] for name in model_names], 
+                                                            [test_costs_averaged[name] for name in model_names])
+        sorted_costs = sorted(costs_not_redundant)
+        lin_spaces = [
+            np.linspace(sorted_costs[i], sorted_costs[i+1], n_iterations) for i in range(len(sorted_costs) - 1)
+        ]
+        max_cost_space = np.concatenate(lin_spaces)
+    else:
+        costs_models = [test_costs_averaged[name] for name in model_names]
+        max_cost_space = np.linspace(min(costs_models), sum(costs_models), n_iterations * len(models))
+    
     if no_cascade_router:
         results, results_train = None, None
     else:
-        results, results_train = test_router_all(models, max_cost_space, assume_constant=False, is_cascader=False, is_router=False, **kwargs)
+        results, results_train = test_router_all(models, max_cost_space, assume_constant=False or assume_constant, 
+                                                 is_cascader=False, is_router=False, **kwargs)
     
     if no_cascade:
         results_cascade, results_cascade_train = None, None
@@ -563,13 +621,19 @@ def test_everything(models, test_costs_averaged, test_qualities_averaged, n_iter
     else:
         results_cascade, results_cascade_train = test_router_all(models, max_cost_space, assume_constant=True, 
                                                                 is_cascader=True, **kwargs)
-        results_cascade_ours, results_cascade_train_ours = test_router_all(models, max_cost_space, assume_constant=False,
+        if not no_cascade_router:
+            results_cascade_ours, results_cascade_train_ours = test_router_all(models, max_cost_space, 
+                                                                           assume_constant=False or assume_constant,
                                                                             is_cascader_ours=True, **kwargs)
+        else:
+            results_cascade_ours, results_cascade_train_ours = None, None
     
     if no_router:
         results_router, results_router_train = None, None
     else:
-        results_router, results_router_train = test_router_all(models, max_cost_space, assume_constant=False, is_router=True, **kwargs)
+        results_router, results_router_train = test_router_all(models, max_cost_space, 
+                                                               assume_constant=False or assume_constant, 
+                                                               is_router=True, **kwargs)
 
     qualities_baseline = np.array(np.array(test_qualities_averaged[model_names]))
     costs_baseline = np.array(np.array(test_costs_averaged[model_names]))
@@ -583,7 +647,10 @@ def test_everything(models, test_costs_averaged, test_qualities_averaged, n_iter
         aucs_cascade_ours = None
     else:
         aucs_cascade = auc_all(results_cascade['quality'], results_cascade['cost'], qualities_baseline, costs_baseline)
-        aucs_cascade_ours = auc_all(results_cascade_ours['quality'], results_cascade_ours['cost'], qualities_baseline, costs_baseline)
+        if no_cascade_router:
+            aucs_cascade_ours = None
+        else:
+            aucs_cascade_ours = auc_all(results_cascade_ours['quality'], results_cascade_ours['cost'], qualities_baseline, costs_baseline)
 
     if no_router:
         aucs_router = None

@@ -86,7 +86,7 @@ class BaselineCascader(Algorithm):
         self.lambdas = [0 for _ in range(len(self.models) - 1)]
         current_quality = -np.inf
         qualities_per_step, costs_per_step = self.generate_step_data(questions, model_answers)
-
+        print(qualities_per_step)
         if ground_truth_qualities is None:
             ground_truth_qualities = qualities_per_step[-1]
         if ground_truth_costs is None:

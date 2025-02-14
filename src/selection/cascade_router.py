@@ -109,7 +109,7 @@ class CascadeRouter(Algorithm):
         if self.max_depth is not None:
             max_depth = self.max_depth if max_depth is None else min(self.max_depth, max_depth)
 
-        if max_depth is not None and step >= max_depth:
+        if (max_depth is not None and step >= max_depth) or step >= len(self.models):
             return None, []
         if lambda_ is None:
             lambda_ = self.lambdas[step]
@@ -142,14 +142,14 @@ class CascadeRouter(Algorithm):
                         [sigma_qualities],
                         [model_answers_question]
                     )
-                if len(not_run_models) > 0 and self.do_speedup and not self.cascade:
+                if len(not_run_models) > 0 and self.do_speedup and not self.cascade and len(all_models) > 1:
                     cost_last_model = costs[not_run_models[-1]]
                     if (quality_supermodel - quality_parent_supermodel - lambda_ * cost_last_model) < 0:
                         continue
                 tradeoff = np.round(quality_supermodel - lambda_ * cost_supermodel, self.rounding_digits)
-                if 'all' not in best_models or tradeoff > best_models['all'][0][2]:
+                if len(all_models) > 0 and ('all' not in best_models or tradeoff > best_models['all'][0][2]):
                     best_models['all'] = [(run_models, not_run_models, tradeoff, cost_supermodel)]
-                elif tradeoff == best_models['all'][0][2]:
+                elif len(all_models) > 0 and tradeoff == best_models['all'][0][2]:
                     best_models['all'] += [(run_models, not_run_models, tradeoff, cost_supermodel)]
 
                 models_possibilities = [i for i in range(len(model_answers_question)) 
@@ -240,11 +240,7 @@ class CascadeRouter(Algorithm):
             indices_with_answer = [j for j in range(len(quality)) if model_answers[i][j] is not None]
             if len(indices_with_answer) == 0:
                 models_selected.append(None)
-            elif self.cascade:
-                models_selected.append(self.models[indices_with_answer[-1]])
-            else:
-                models_selected.append(self.models[indices_with_answer[np.argmax(quality[indices_with_answer])]])
-
+            models_selected.append(self.models[indices_with_answer[np.argmax(quality[indices_with_answer])]])
         return models_selected
 
     def _execute_cheap_expensive(self, lambdas, questions, model_answers, ground_truth_qualities, ground_truth_costs):
@@ -284,8 +280,7 @@ class CascadeRouter(Algorithm):
         models_run = [[] for _ in range(len(questions))]
         none_lambdas = sum([1 for lambda_ in lambdas if lambda_ is None])
         max_depth = len(lambdas) - none_lambdas
-        for step in range(len(self.models)):
-            lambda_ = lambdas[step]
+        for step in range(len(self.models) + 1):
             end_index = step
             for i in range(len(questions)):
                 if done[i]:
@@ -298,20 +293,23 @@ class CascadeRouter(Algorithm):
                 sigma_qualities = sigma_qualities[0]
                 costs = self.cost_computer.predict([questions[i]], [model_answers_sample])
                 costs = costs[0]
-                model_here, future_models = self._predict_model(questions[i], 
-                                                                qualities, sigma_qualities, 
-                                                                costs, model_answers_sample,
-                                                                step, lambda_, 
-                                                                cheapest=cheapest, 
-                                                                most_expensive=most_expensive, 
-                                                                max_depth=max_depth)
+                if len(lambdas) > step:
+                    lambda_ = lambdas[step]
+                    model_here, future_models = self._predict_model(questions[i], 
+                                                                    qualities, sigma_qualities, 
+                                                                    costs, model_answers_sample,
+                                                                    step, lambda_, 
+                                                                    cheapest=cheapest, 
+                                                                    most_expensive=most_expensive, 
+                                                                    max_depth=max_depth)
+                else:
+                    model_here, future_models = None, []
                 
 
-                if model_here is None or step == len(self.models) - 1 or (self.max_depth is not None and step == self.max_depth - 1):
+                if model_here is None:
                     models_run_here = models_run[i] + future_models
-                    selected_model = max(models_run_here)
-                    if not self.cascade:
-                        selected_model = models_run_here[np.argmax(qualities[models_run_here])]
+                    
+                    selected_model = models_run_here[np.argmax(qualities[models_run_here])]
                     if ground_truth_qualities is not None:
                         quality += ground_truth_qualities[i][selected_model]
                     else:
@@ -322,8 +320,7 @@ class CascadeRouter(Algorithm):
                         cost += np.sum(costs[models_run_here])
                     done[i] = True
                 else:
-                    if model_here is not None:
-                        models_run[i].append(model_here)
+                    models_run[i].append(model_here)
 
             if all(done):
                 break

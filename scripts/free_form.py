@@ -88,9 +88,46 @@ all_models = [
             'read_cost': 0.6 * 10 ** -6,
             'write_cost': 0.6 * 10 ** -6
         },
+        {
+            'name': 'Qwen/Qwen2.5-0.5B-Instruct',
+            'read_cost': 0.03,
+            'write_cost': 0.03,
+            "is_huggingface": True
+        },
+        {
+            'name': 'Qwen/Qwen2.5-1.5B-Instruct',
+            'read_cost': 0.1,
+            'write_cost': 0.1,
+            "is_huggingface": True
+        },
+        {
+            'name': 'Qwen/Qwen2.5-3B-Instruct',
+            'read_cost': 0.2,
+            'write_cost': 0.2,
+            "is_huggingface": True
+        },
+        {
+            'name': 'Qwen/Qwen2.5-7B-Instruct-Turbo',
+            'huggingface_name': 'Qwen/Qwen2.5-7B-Instruct',
+            'read_cost': 0.3,
+            'write_cost': 0.3
+        },
+        {
+            'name': 'Qwen/Qwen2.5-72B-Instruct-Turbo',
+            'huggingface_name': 'Qwen/Qwen2.5-72B-Instruct',
+            'read_cost': 1.2,
+            'write_cost': 1.2
+        },
+        {
+            'name': 'microsoft/Phi-3.5-mini-instruct',
+            'read_cost': 0.2,
+            'write_cost': 0.2,
+            "is_huggingface": True
+        },
     ]
 
-
+def linear_model():
+    return LogisticRegression(max_iter=1000)
 
 if __name__ == '__main__':
     import argparse
@@ -98,6 +135,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run classification experiments")
     parser.add_argument("--dataset", type=str, default="mmlu_gsm8k", help="Dataset name")
     parser.add_argument('--models', type=str, default='0,1,2')
+    parser.add_argument('--assume-constant-costs', action='store_true')
 
     args = parser.parse_args()
 
@@ -128,6 +166,10 @@ if __name__ == '__main__':
 
     train_split = int(0.5 * len(train_queries))
 
+    max_lambda = 10000
+    if args.assume_constant_costs:
+        max_lambda = 5
+
     results = test_everything(models, n_iterations=10,
                           train_model_answers=train_model_answers,
                         train_costs=train_costs,
@@ -141,14 +183,15 @@ if __name__ == '__main__':
                         test_qualities_averaged=test_qualities_averaged,
                         dataset=dataset,
                         data_folder=data_folder,
-                        max_lambda=10000,
-                        model_class = LogisticRegression,
+                        max_lambda=max_lambda,
+                        model_class = linear_model,
                         n_cores=30, greedy=False, train_split=train_split,
                         force_order=True, max_depth=4, n_samples=100, 
                         no_cascade_router=False, no_router=False, no_cascade=False, 
                         set_sigma_none=False, is_classification=False,
                         cascade_strategies=[strat1, strat4], 
-                        cascade_router_strategies=[strat1, strat4, strat3, strat2])
+                        cascade_router_strategies=[strat1, strat4, strat3, strat2], 
+                        is_latency_cost=args.assume_constant_costs)
 
     filename = f'{args.models}.json'
 

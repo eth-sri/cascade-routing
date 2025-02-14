@@ -8,7 +8,7 @@ Follow these steps to set up the environment and install the necessary dependenc
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/eth-sri/cascade-routing
+git clone https://github.com/eth-sri/cascade-routing.git
 cd cascade-routing
 ```
 2. **Create and activate the enviroment**
@@ -201,13 +201,9 @@ print(selected_models[0]) # Example output: 'Llama-3.1-70B'
 
 ## Reproducing Results
 
-To reproduce our results, you have two options: you can either download our pre-generated inference results or run the inference from scratch using your own resources.
+To reproduce our results, you can either start from scratch and regenerate the raw data, or download (http://files.sri.inf.ethz.ch/cascade-routing/data.tar.gz)[http://files.sri.inf.ethz.ch/cascade-routing/data.tar.gz] and extract it in this repository. Below you can find the instructions to start from scratch.
 
-### Option 1: Using Pre-generated Results
-
-If you want to avoid spending money on API usage, you can download our raw inference results. Simply download [the compressed data](https://files.sri.inf.ethz.ch/cascade-routing/data.zip) and extract it into this directory. This will provide you with the results used in our experiments without needing to re-run the inference.
-
-### Option 2: Reproducing Results from Scratch
+### Reproducing Results from Scratch
 
 If you prefer to run the inference yourself, follow these steps:
 
@@ -220,9 +216,33 @@ If you prefer to run the inference yourself, follow these steps:
 2. **Run the Generation Script:**
     Use the provided script to run the inference across several models and process the data:
     ```bash
-   bash scripts/generation.sh
-   ```
+    bash scripts/generation.sh
+    ```
     This step will make API calls, and depending on the scale of the task, it will cost approximately 100 USD using the Together API.
+
+To obtain the results for the SWE-Bench benchmark, first clone the Github repository [SWE-Bench/Experiments](https://github.com/swe-bench/experiments). Follow their instructions to setup AWS and allow data to be downloaded. Then, copy the files `scripts/other/swebench.sh` and `scripts/other/swebench.py` in their repo. Run:
+ ```bash
+python -m pip install boto3
+bash swebench.sh
+python swebench.py
+```
+These scripts will create a `data` folder in the repository. You should then copy this data folder in the `data/swebench` folder of this repository. 
+
+To obtain the results for the LiveCodeBench benchmark, first clone their [Github repository](https://github.com/LiveCodeBench/LiveCodeBench) and follow their instructions for installation. Then, copy the files `scripts/other/livecodebench.sh` and `scripts/other/livecodebench.py` in their repo. Run:
+ ```bash
+bash livecodebench.sh
+python livecodebench.py
+``` 
+These scripts will create a `data` folder in the repository. You should then copy this data folder in the `data/code_math/livecodebench` folder of this repository. 
+
+
+To obtain the results for the Minerva Math benchmark, first clone the [LM Eval Harness Github repository](https://github.com/EleutherAI/lm-evaluation-harness) and follow the instructions for installation. Then, copy the files `scripts/other/minerva.sh` and `scripts/other/minerva.py` in their repo. Run:
+ ```bash
+bash minerva.sh
+python minerva.py
+```
+These scripts will create a `data` folder in the repository. You should then copy this data folder in the `data/code_math/minerva` folder of this repository. 
+
 
 ### Running Cascade Routing and Baselines
 For both options above (whether you're using pre-generated results or generating them from scratch), run the following script to perform cascade routing and evaluate its baselines on all benchmarks:
@@ -266,7 +286,6 @@ This folder holds the automatically generated documentation for all classes in t
 ### Data ([`data/`](data/))
 
 The `data/` folder should contain all necessary data for running the experiments. Once you’ve downloaded or reproduced the data, the most relevant subfolder is [`data/results`](data/results), which contains the raw results for each experiment.
-
 
 ## Citation
 

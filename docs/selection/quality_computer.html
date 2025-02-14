@@ -139,7 +139,7 @@ Default is 100.</p></div>
                 predictions = self.predict(
                     questions, model_answers_here
                 )[0]
-                cov = np.cov(np.array(predictions) - np.array(predictions_all_models))
+                cov = np.cov((np.array(predictions) - np.array(predictions_all_models)).T)
                 self.covariances_default[str_rep] = cov
 
     def predict_covariances(self, questions, model_answers):
@@ -159,7 +159,10 @@ Default is 100.</p></div>
         for answers in model_answers:
             not_none_indices = [i for i, ans in enumerate(answers) if ans is not None]
             str_rep = &#39;,&#39;.join([str(i) for i in sorted(not_none_indices)])
-            covariances.append(self.covariances_default[str_rep])
+            if str_rep not in self.covariances_default:
+                covariances.append(None)
+            else:
+                covariances.append(self.covariances_default[str_rep])
         return covariances</code></pre>
 </details>
 <h3>Ancestors</h3>
@@ -170,6 +173,7 @@ Default is 100.</p></div>
 <ul class="hlist">
 <li><a title="selection.classification.ClassificationQualityComputer" href="classification.html#selection.classification.ClassificationQualityComputer">ClassificationQualityComputer</a></li>
 <li><a title="selection.quality_computer.GroundTruthQualityComputer" href="#selection.quality_computer.GroundTruthQualityComputer">GroundTruthQualityComputer</a></li>
+<li><a title="selection.swebench.SWEBenchQualityComputer" href="swebench.html#selection.swebench.SWEBenchQualityComputer">SWEBenchQualityComputer</a></li>
 </ul>
 <h3>Methods</h3>
 <dl>

@@ -2,7 +2,7 @@ from .base_computer import BaseComputer
 from .quality_computer import BaseQualityComputer
 from .cost_computer import BaseCostComputer
 import numpy as np
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LinearRegression
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import itertools
@@ -13,7 +13,8 @@ import os
 class ClassificationCostComputer(BaseCostComputer):
     def __init__(self, input_costs, output_costs, tokenizers=None, 
                  tokenize=True, n_output_tokens=1, 
-                 constant_cost=False, store_all=False):
+                 constant_cost=False, store_all=False, 
+                 is_latency_cost=False):
         """
         Initialize the Classification Computer object.
 
@@ -35,16 +36,42 @@ class ClassificationCostComputer(BaseCostComputer):
         self.n_output_tokens = n_output_tokens
         self.constant_cost = constant_cost
         self.store_all = store_all
+        self.is_latency_cost = is_latency_cost
+        self.latency_models = []
+        self.computed_latency_costs = []
         self.computed_costs = []
         assert tokenizers is not None or not tokenize
 
-    def fit(self, questions, model_answers, measure=None):
+    def fit(self, questions, model_answers, measure):
         self.constant_costs = []
         for model in range(len(model_answers[0])):
             self.constant_costs.append(
                 np.mean(measure[:, model])
             )
             self.computed_costs.append(dict())
+            self.computed_latency_costs.append(dict())
+            latency_model_X = [[len(question[0])] for question in questions]
+            self.latency_models.append(LinearRegression())
+            self.latency_models[model].fit(latency_model_X, measure[:, model])
+
+    def add_latency_ground_truths(self, questions, model_answers, latencies):
+        """
+        Add latency ground truths for the given questions and model answers.
+
+        Args:
+            questions (list): List of questions.
+            model_answers (list): List of model answers.
+            latencies (list): List of latencies.
+
+        Returns:
+            None
+        """
+        for index, question in enumerate(questions):
+            for model in range(len(model_answers[0])):
+                if not isinstance(question, str):
+                    question = question[0]
+                if question not in self.computed_costs[model]:
+                    self.computed_latency_costs[model][question] = latencies[index][model]
 
     def predict(self, questions, model_answers):
         length_models = len(model_answers[0])
@@ -52,11 +79,16 @@ class ClassificationCostComputer(BaseCostComputer):
         all_costs = []
         for model in range(length_models):
             costs = []
-            for question in questions:
+            for index, question in enumerate(questions):
+                models_run = ','.join([str(int(model_answers[index][model_] is not None)) 
+                                   for model_ in range(length_models)])
                 if not isinstance(question, str):
                     question = question[0]
-                if (self.training or self.store_all) and question in self.computed_costs[model]:
-                    costs.append(self.computed_costs[model][question])
+                if self.is_latency_cost and question in self.computed_latency_costs[model] and model_answers[index][model] is not None:
+                    costs.append(self.computed_latency_costs[model][question])
+                    continue
+                if (self.training or self.store_all) and question in self.computed_costs[model] and models_run in self.computed_costs[model][question]:
+                    costs.append(self.computed_costs[model][question][models_run])
                     continue
                 elif not self.tokenize:
                     tokenized_question = question
@@ -68,9 +100,14 @@ class ClassificationCostComputer(BaseCostComputer):
                 else:
                     cost = self.input_costs[model] * len(tokenized_question)
                     cost += self.output_costs[model] * self.n_output_tokens # one output token
+                if self.is_latency_cost:
+                    cost = self.latency_models[model].predict([[len(question)]])[0]
                 costs.append(cost)
                 if self.training or self.store_all:
-                    self.computed_costs[model][question] = cost
+                    if question in self.computed_costs[model]:
+                        self.computed_costs[model][question][models_run] = cost
+                    else:
+                        self.computed_costs[model][question] = {models_run: cost}
 
             all_costs.append(costs)
         return np.array(all_costs).T
@@ -120,14 +157,13 @@ class ClassificationQualityComputer(BaseQualityComputer):
         self.question_indicator = question_indicator
         self.answer_indicator = answer_indicator
         self.remove_options = remove_options
-        self.min_length = None
-        self.max_length = None
         self.add_entropy = add_entropy
         self.add_js_divergence = add_js_divergence
         self.add_equal_argmax = add_equal_argmax
         self.max_depth = max_depth
         self.store_all = store_all
         self.lookup_embeddings = None
+        self.predict_proba = hasattr(self.model_class(), 'predict_proba')
         self.question_predictions = dict()
 
     @property
@@ -196,14 +232,11 @@ class ClassificationQualityComputer(BaseQualityComputer):
         return question
 
     def fit(self, questions, model_answers, measure):
-        self.min_length = min([len(self.parse_question(question)) for question in questions])
-        self.max_length = max([len(self.parse_question(question)) for question in questions])
         n_models = len(model_answers[0])
         self.models = [dict() for _ in range(n_models)]
         X, X_all_models, y, for_model, all_models_run = self.prepare_data(questions, model_answers, measure, n_models)
         y_pred_all = np.zeros((len(X) // n_models, n_models))
         y_pred_all_models = np.zeros((len(X) // n_models, n_models))
-
         for model in range(n_models):
             models_to_fit = np.unique(all_models_run)
             for models_run_string in tqdm(models_to_fit, desc=f'Model {model}'):
@@ -213,7 +246,10 @@ class ClassificationQualityComputer(BaseQualityComputer):
                 X_here = np.array([X[i] for i in indices_run])
                 y_here = np.array([y[i] for i in indices_run])
                 self.models[model][models_run_string].fit(X=X_here, y=y_here)
-                y_pred = self.models[model][models_run_string].predict_proba(X_here)[:, 1]
+                if self.predict_proba:
+                    y_pred = self.models[model][models_run_string].predict_proba(X_here)[:, 1]
+                else:
+                    y_pred = self.models[model][models_run_string].predict(X_here)
                 
                 indices_pred_all = [i // n_models for i in indices_run]
                 y_pred_all[indices_pred_all, model] = y_pred
@@ -312,7 +348,11 @@ class ClassificationQualityComputer(BaseQualityComputer):
         Returns:
             array-like: The predicted target variable values.
         """
-        return model.predict_proba(X)[:, 1]
+        if self.predict_proba:
+            return model.predict_proba(X)[:, 1]
+        else:
+            return model.predict(X)
+
 
     def predict(self, questions, model_answers):
         n_models = len(model_answers[0])
@@ -422,7 +462,7 @@ class ClassificationQualityComputer(BaseQualityComputer):
         features.append(1 / (max(n_options, 1)))
         return features
 
-    def agreement_features(self, n_models, models_answers_sample):
+    def agreement_features(self, question, n_models, models_answers_sample):
         """
         Calculates agreement features between models' answers.
 
@@ -489,7 +529,7 @@ class ClassificationQualityComputer(BaseQualityComputer):
         """
         X_sample = []
         X_sample += self.base_features(question, index, model)
-        X_sample += self.agreement_features(n_models, models_answers_sample)
+        X_sample += self.agreement_features(question, n_models, models_answers_sample)
         X_sample += self.certainty_features(model, models_answers_sample)
         if len(X_sample) == 0:
             X_sample = [0]
