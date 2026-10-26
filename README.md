@@ -201,7 +201,11 @@ print(selected_models[0]) # Example output: 'Llama-3.1-70B'
 
 ## Reproducing Results
 
-To reproduce our results, you can either start from scratch and regenerate the raw data, or download (http://files.sri.inf.ethz.ch/cascade-routing/data.tar.gz)[http://files.sri.inf.ethz.ch/cascade-routing/data.tar.gz] and extract it in this repository. Below you can find the instructions to start from scratch.
+To reproduce our results, you can either start from scratch and regenerate the raw data, or download [the data archive](https://files.sri.inf.ethz.ch/cascade-routing/data.tar.gz) and extract it in this repository. Below you can find the instructions to start from scratch.
+
+### Minerva Math correction (October 2026)
+
+Minerva answers near the original 256-token cap were regenerated with a 2,048-token cap. The corrected Math+Code AUCs are 58.203 for cascade routing and 58.202 for routing.
 
 ### Reproducing Results from Scratch
 

@@ -57,7 +57,7 @@ def compute_expected_max(qualities, sigma_qualities, independent=False, n_sample
     if (n, n_samples) in computed_random_numbers_sobol:
         normal_samples = computed_random_numbers_sobol[(n, n_samples)]
     else:
-        sampler = qmc.Sobol(d=n, scramble=True)
+        sampler = qmc.Sobol(d=n, scramble=True, seed=0)
         qmc_samples = sampler.random(n_samples)
         normal_samples = norm.ppf(qmc_samples)
         computed_random_numbers_sobol[(n, n_samples)] = normal_samples
