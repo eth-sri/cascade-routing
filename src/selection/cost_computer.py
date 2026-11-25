@@ -36,7 +36,9 @@ class GroundTruthCostComputer(BaseCostComputer):
         self.assume_constant = assume_constant
         self.cost_mapping = None
 
-    def fit(self, questions, model_answers, measure):
+    def fit(self, questions, model_answers, measure, *, calibration_size=None):
+        """Simulate signals for every row and calibrate on the training prefix."""
+        calibration = slice(calibration_size)
         self.cost_mapping = dict()
         noisy_values = []
         for measure_value in measure:
@@ -48,7 +50,7 @@ class GroundTruthCostComputer(BaseCostComputer):
             noisy_values.append(value)
 
         if self.assume_constant:
-            self.average_costs = np.mean(measure, axis=0)
+            self.average_costs = np.mean(measure[calibration], axis=0)
 
         noisy_values = np.array(noisy_values)
 
@@ -57,8 +59,9 @@ class GroundTruthCostComputer(BaseCostComputer):
         for model in range(noisy_values.shape[1]):
             for i in range(noisy_values.shape[2]):
                 linear_model = LinearRegression()
-                linear_model.fit(noisy_values[:, model, i].reshape(-1, 1), measure[:, model])
-                actual_values[:, model, i] = linear_model.predict(noisy_values[:, model, i].reshape(-1, 1))
+                features = noisy_values[:, model, i:i + 1]
+                linear_model.fit(features[calibration], measure[calibration, model])
+                actual_values[:, model, i] = linear_model.predict(features)
         
         for q, a in zip(questions, actual_values):
             self.cost_mapping[q] = a

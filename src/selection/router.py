@@ -118,9 +118,9 @@ class Router(Algorithm):
             elif most_expensive:
                 best_model = best_model_expensive
             elif np.random.rand() < self.gamma:
-                best_model = best_model_expensive
-            else:
                 best_model = best_model_cheapest
+            else:
+                best_model = best_model_expensive
         else:
             best_model = best_models[0]
         best_model = self.models[best_model]

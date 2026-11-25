@@ -408,7 +408,8 @@ def test_router(models, max_cost, train_model_answers, train_costs, train_qualit
         cost_computer.fit(
             np.concatenate([train_queries, test_queries], axis=0),
             np.concatenate([train_model_answers_here, test_model_answers_here], axis=0),
-            np.concatenate([train_costs_here, test_costs_here], axis=0)
+            np.concatenate([train_costs_here, test_costs_here], axis=0),
+            calibration_size=len(train_queries),
         )
     if is_latency_cost:
         cost_computer.add_latency_ground_truths(
@@ -423,7 +424,8 @@ def test_router(models, max_cost, train_model_answers, train_costs, train_qualit
         quality_computer.fit(
             np.concatenate([train_queries, test_queries], axis=0),
             np.concatenate([train_model_answers_here, test_model_answers_here], axis=0),
-            np.concatenate([train_qualities_here, test_qualities_here], axis=0)
+            np.concatenate([train_qualities_here, test_qualities_here], axis=0),
+            calibration_size=len(train_queries),
         )
     if is_cascader:
         max_lambda = 1
@@ -467,7 +469,8 @@ def test_router(models, max_cost, train_model_answers, train_costs, train_qualit
             max_depth=(max_depth if not is_cascader_ours else None),
             set_sigma_none=set_sigma_none,
             cascade=is_cascader_ours,
-            do_speedup=do_speedup
+            do_speedup=do_speedup,
+            return_last=is_code_math and is_cascader_ours,
         )
 
     if is_routerbench:

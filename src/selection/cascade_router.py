@@ -10,7 +10,7 @@ class CascadeRouter(Algorithm):
                  rounding_digits=8, greedy=False, 
                  force_order=True, max_depth=None, 
                  top_k_keep=None, set_sigma_none=False, 
-                 cascade=False, do_speedup=True):
+                 cascade=False, do_speedup=True, return_last=False):
         """
         Initializes a CascadeRouter object.
 
@@ -35,6 +35,7 @@ class CascadeRouter(Algorithm):
             do_speedup: A boolean indicating whether to perform speedup based on Lemma 1 in our paper. 
                         Only used for ablation, should not be used in practice.
                         Default is True.
+            return_last: Use the last answer in a fixed-order cascade for tuning and prediction.
         """
         super().__init__(quality_computer, cost_computer, models, 
                          max_expected_cost, strategies, rounding_digits)
@@ -53,6 +54,9 @@ class CascadeRouter(Algorithm):
         self.do_speedup = do_speedup
         if cascade:
             self.force_order = True
+        if return_last and not self.force_order:
+            raise ValueError("Returning the last answer requires a fixed model order.")
+        self.return_last = return_last
 
     def get_lambdas(self):
         """
@@ -185,11 +189,10 @@ class CascadeRouter(Algorithm):
         if len(supermodel[1]) == 0:
             return None, []
         
-        if not self.force_order:
-            index_model_to_run = np.argmin(best_models[model][2] for model in supermodel[1])
+        if self.force_order:
+            model_to_run = supermodel[1][0]
         else:
-            index_model_to_run = 0
-        model_to_run = supermodel[1][index_model_to_run]
+            model_to_run = min(supermodel[1], key=costs.__getitem__)
         return model_to_run, supermodel[1]
 
         
@@ -235,12 +238,17 @@ class CascadeRouter(Algorithm):
 
     def select_answer(self, questions, model_answers):
         models_selected = []
-        qualities, sigma_qualities = self.quality_computer.predict(questions, model_answers)
-        for i, quality in enumerate(qualities):
-            indices_with_answer = [j for j in range(len(quality)) if model_answers[i][j] is not None]
-            if len(indices_with_answer) == 0:
+        if not self.return_last:
+            qualities, _ = self.quality_computer.predict(questions, model_answers)
+        for i, answers in enumerate(model_answers):
+            indices_with_answer = [j for j, answer in enumerate(answers) if answer is not None]
+            if not indices_with_answer:
                 models_selected.append(None)
-            models_selected.append(self.models[indices_with_answer[np.argmax(quality[indices_with_answer])]])
+            elif self.return_last:
+                models_selected.append(self.models[indices_with_answer[-1]])
+            else:
+                index = indices_with_answer[np.argmax(qualities[i][indices_with_answer])]
+                models_selected.append(self.models[index])
         return models_selected
 
     def _execute_cheap_expensive(self, lambdas, questions, model_answers, ground_truth_qualities, ground_truth_costs):
@@ -309,7 +317,10 @@ class CascadeRouter(Algorithm):
                 if model_here is None:
                     models_run_here = models_run[i] + future_models
                     
-                    selected_model = models_run_here[np.argmax(qualities[models_run_here])]
+                    if self.return_last:
+                        selected_model = models_run_here[-1]
+                    else:
+                        selected_model = models_run_here[np.argmax(qualities[models_run_here])]
                     if ground_truth_qualities is not None:
                         quality += ground_truth_qualities[i][selected_model]
                     else:

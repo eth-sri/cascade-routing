@@ -141,7 +141,9 @@ class GroundTruthQualityComputer(BaseQualityComputer):
         self.quality_mapping = None
         self.sigmas = None
 
-    def fit(self, questions, model_answers, measure):
+    def fit(self, questions, model_answers, measure, *, calibration_size=None):
+        """Simulate signals for every row and calibrate on the training prefix."""
+        calibration = slice(calibration_size)
         self.quality_mapping = dict()
         noisy_values = []
         for measure_value in measure:
@@ -164,10 +166,12 @@ class GroundTruthQualityComputer(BaseQualityComputer):
         for model in range(noisy_values.shape[1]):
             for i in range(noisy_values.shape[2]):
                 linear_model = LinearRegression()
-                linear_model.fit(noisy_values[:, model, i].reshape(-1, 1), measure[:, model])
-                actual_values[:, model, i] = linear_model.predict(noisy_values[:, model, i].reshape(-1, 1))
+                features = noisy_values[:, model, i:i + 1]
+                linear_model.fit(features[calibration], measure[calibration, model])
+                actual_values[:, model, i] = linear_model.predict(features)
             
-            self.sigmas[model] = np.std(actual_values[:, model, 0] - actual_values[:, model, 1])
+            self.sigmas[model] = np.std(actual_values[calibration, model, 0] -
+                                        actual_values[calibration, model, 1])
 
         for q, a in zip(questions, actual_values):
             self.quality_mapping[q] = a
